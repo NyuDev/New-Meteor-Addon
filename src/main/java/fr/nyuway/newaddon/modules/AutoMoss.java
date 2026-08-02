@@ -168,6 +168,13 @@ public class AutoMoss extends Module {
         .defaultValue(true)
         .build());
 
+    private final Setting<Boolean> autoDisable = sgGeneral.add(new BoolSetting.Builder()
+        .name("auto-disable")
+        .description("Turn the module off once there is no bone meal left anywhere in your " +
+                     "inventory, instead of idling and scanning for nothing.")
+        .defaultValue(true)
+        .build());
+
     private final Setting<Boolean> swing = sgGeneral.add(new BoolSetting.Builder()
         .name("swing")
         .description("Swing your hand client-side. Off still sends the swing packet.")
@@ -437,9 +444,17 @@ public class AutoMoss extends Module {
                 // Give the move a tick to land before looking for the stack again.
                 timer = delay.get();
                 if (debug.get()) log("refilled bone meal from inventory");
-            } else if (debugDue()) {
-                log("idle: no bone meal in hotbar");
+                return;
             }
+
+            // Nothing in the hotbar and nothing left to refill from: genuinely out.
+            if (autoDisable.get() && !InvUtils.find(Items.BONE_MEAL).found()) {
+                error("Out of bone meal.");
+                toggle();
+                return;
+            }
+
+            if (debugDue()) log("idle: no bone meal in hotbar");
             return;
         }
 

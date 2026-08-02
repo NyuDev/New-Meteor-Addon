@@ -70,6 +70,7 @@ family. Set `stone-only` if you want to count stone alone.
 | `swap-back` | on | Return to your previous hotbar slot after each bone meal. |
 | `swing` | on | Swing your hand client-side; off still sends the swing packet. |
 | `auto-refill` | on | Move bone meal up from your inventory when the hotbar runs out. |
+| `auto-disable` | on | Turn the module off once you are out of bone meal entirely. |
 | `place-moss` | off | Put moss blocks from your hotbar down next to exposed stone. |
 
 `place-moss` turns carried moss into new work: it looks for an air pocket that has a floor
