@@ -70,6 +70,15 @@ public class ElytraResupply extends Module {
     /** Ticks any single phase may take before the run is treated as failed. */
     private static final int PHASE_TIMEOUT = 200;
 
+    /**
+     * How far a new elytra destination must be before it is believed to be a new trip rather
+     * than Baritone choosing somewhere close by to put down.
+     */
+    private static final int RETARGET_MIN_DIST = 256;
+
+    /** Ticks spent chasing a dropped item before writing it off and carrying on. */
+    private static final int COLLECT_GIVEUP = 160;
+
     private final SettingGroup sgGeneral = settings.getDefaultGroup();
     private final SettingGroup sgTriggers = settings.createGroup("Triggers");
 
@@ -83,7 +92,7 @@ public class ElytraResupply extends Module {
         .name("target-fireworks")
         .description("How many fireworks to carry away. Several stacks: one is barely a leg " +
                      "of a long crossing, and the whole point is not to land again shortly.")
-        .defaultValue(192).min(1).max(576).sliderMin(64).sliderMax(384)
+        .defaultValue(320).min(1).max(1024).sliderMin(64).sliderMax(640)
         .build());
 
     private final Setting<Integer> minElytraDurability = sgTriggers.add(new IntSetting.Builder()
@@ -96,7 +105,7 @@ public class ElytraResupply extends Module {
         .name("xp-bottles")
         .description("How many XP bottles to take out for a mending session. Leftovers go " +
                      "back in the shulker, so taking plenty costs nothing.")
-        .defaultValue(128).min(1).max(576).sliderMin(64).sliderMax(384)
+        .defaultValue(256).min(1).max(1024).sliderMin(64).sliderMax(640)
         .build());
 
     private final Setting<Integer> actionDelay = sgGeneral.add(new IntSetting.Builder()
@@ -170,6 +179,8 @@ public class ElytraResupply extends Module {
     private final BlockPos.MutableBlockPos scratch = new BlockPos.MutableBlockPos();
     /** True while Baritone is walking us onto a drop we failed to collect from where we stood. */
     private boolean walkingToDrop;
+    /** Whether the elytra process was flying last tick, to tell a new trip from a retarget. */
+    private boolean elytraWasActive;
 
     private BlockPos chestPos;
     private BlockPos shulkerPos;
@@ -284,9 +295,26 @@ public class ElytraResupply extends Module {
     private void watchForLanding() {
         if (BaritoneBridge.isElytraActive()) {
             BlockPos dest = BaritoneBridge.elytraDestination();
-            if (dest != null) resumeTarget = dest;
+
+            if (dest != null) {
+                if (!elytraWasActive || resumeTarget == null) {
+                    // Start of a flight: whatever it is aiming at now is what was asked for.
+                    resumeTarget = dest;
+                    log("travel goal noted: %s", dest);
+                } else if (!dest.equals(resumeTarget)
+                    && dest.distSqr(mc.player.blockPosition()) > RETARGET_MIN_DIST * RETARGET_MIN_DIST) {
+                    // A genuinely new long-range goal, so honour it. Anything nearby is
+                    // Baritone picking somewhere to set down, and taking that as the trip's
+                    // destination is what made it try to land where it already was.
+                    resumeTarget = dest;
+                    log("travel goal changed: %s", dest);
+                }
+            }
+
+            elytraWasActive = true;
             return;
         }
+        elytraWasActive = false;
 
         if (resumeTarget == null || !mc.player.onGround()) return;
 
@@ -559,7 +587,12 @@ public class ElytraResupply extends Module {
                 BaritoneBridge.pathTo(pos, 0);
             }
 
-            // Only give up when the phase itself times out, which the caller handles.
+            // Chasing it forever would strand the trip. Write it off and carry on, rather
+            // than letting the phase timeout tear down a run that is otherwise finished.
+            if (phaseTicks > COLLECT_GIVEUP) {
+                problem("Could not recover the drop at %s; carrying on without it.", pos);
+                to(next);
+            }
             return;
         }
 
@@ -624,7 +657,13 @@ public class ElytraResupply extends Module {
         BaritoneBridge.elytraPathTo(target);
     }
 
-    /** Tries to put things back and pick up what we placed, whatever went wrong. */
+    /**
+     * Tries to put things back and pick up what we placed, whatever went wrong.
+     *
+     * <p>Ends by resuming rather than resetting. A failed resupply is still a trip that was
+     * interrupted, and throwing the destination away leaves you parked wherever the failure
+     * happened - worse than carrying on short of supplies.
+     */
     private void abort() {
         if (mc.player != null && isContainerOpen()) mc.player.closeContainer();
 
@@ -634,6 +673,11 @@ public class ElytraResupply extends Module {
         }
         if (chestPos != null && !mc.level.getBlockState(chestPos).isAir()) {
             to(Phase.BREAK_CHEST);
+            return;
+        }
+
+        if (resumeTarget != null) {
+            to(autoTakeoff.get() ? Phase.TAKEOFF : Phase.RESUME);
             return;
         }
         reset();
