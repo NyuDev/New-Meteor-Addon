@@ -116,7 +116,9 @@ the two options would fight over the same block.
 | --- | --- | --- |
 | `baritone` | off | Walk to moss worth working on when nothing is in reach. |
 | `search-chunks` | 4 | Radius in chunks that Baritone's scanner sweeps for moss. |
-| `rescan-delay` | 3s | Seconds between two searches for somewhere new to go. |
+| `cluster-radius` | 6 | How far around a spot still counts as the same patch. |
+| `min-cluster` | 4 | Blocks a patch must be worth to count as a patch. |
+| `rescan-cooldown` | 3s | Floor on how often the search may run. Not the driver - see below. |
 | `explore` | on | Head somewhere new when nothing nearby is worth working on. |
 | `explore-distance` | 64 | How far to strike out when exploring, in blocks. |
 
@@ -126,9 +128,19 @@ the two options would fight over the same block.
 
 Turned on, AutoMoss becomes a bot: when there is nothing in reach it asks Baritone's own
 chunk scanner for nearby moss, keeps only the positions that would actually convert
-something, and paths to the **most productive** one - a spot that turns four blocks is worth
-walking past one that turns a single block. Pathing is cancelled the instant real work
-appears, so walking never fights the bone mealing.
+something, and heads for the **nearest patch** rather than the nearest single block. A patch
+is the total work within `cluster-radius` of a spot; anything reaching `min-cluster` counts.
+Lone blocks are only used as a fallback when there is no patch at all. Pathing is cancelled
+the instant real work appears, so walking never fights the bone mealing.
+
+**Retargeting is driven by events, not by a clock.** Two things hand Baritone a new
+destination on the tick they happen:
+
+- the last target in reach is finished, so the spot is done;
+- Baritone arrives, or gives up on its path.
+
+`rescan-cooldown` is only a floor to stop the scanner being hammered when there is genuinely
+nothing to find. It does not pace the bot.
 
 Two things keep it from getting stuck, which matters more than raw speed:
 

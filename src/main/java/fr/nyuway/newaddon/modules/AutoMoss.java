@@ -221,9 +221,28 @@ public class AutoMoss extends Module {
         .visible(baritone::get)
         .build());
 
+    private final Setting<Integer> clusterRadius = sgBaritone.add(new IntSetting.Builder()
+        .name("cluster-radius")
+        .description("How far around a spot still counts as the same patch of work. Bigger " +
+                     "values make the bot judge a whole area rather than one block.")
+        .defaultValue(6).min(1).max(16).sliderMin(2).sliderMax(12)
+        .visible(baritone::get)
+        .build());
+
+    private final Setting<Integer> minCluster = sgBaritone.add(new IntSetting.Builder()
+        .name("min-cluster")
+        .description("Blocks a patch must be worth before it counts as a real patch. The bot " +
+                     "goes to the nearest patch that clears this, and only falls back to lone " +
+                     "blocks when there is no patch at all.")
+        .defaultValue(4).min(1).max(32).sliderMin(1).sliderMax(16)
+        .visible(baritone::get)
+        .build());
+
     private final Setting<Integer> rescanDelay = sgBaritone.add(new IntSetting.Builder()
-        .name("rescan-delay")
-        .description("Seconds between two searches for somewhere new to walk to.")
+        .name("rescan-cooldown")
+        .description("Floor on how often the search may run, in seconds. Retargeting is driven " +
+                     "by events - finishing a spot, or arriving - so this only stops the " +
+                     "scanner being hammered when there is genuinely nothing to find.")
         .defaultValue(3).min(1).max(30).sliderMin(1).sliderMax(15)
         .visible(baritone::get)
         .build());
@@ -318,6 +337,10 @@ public class AutoMoss extends Module {
     private BlockPos walkTarget;
     private boolean exploring;
     private double exploreBearing;
+
+    /** Drives retargeting off events rather than a timer: set when the situation changed. */
+    private boolean hadWork;
+    private boolean retargetNow;
     private final Map<BlockPos, Integer> blacklist = new HashMap<>();
 
     /** Guards against pouring bone meal into one block that never changes. */
@@ -345,6 +368,8 @@ public class AutoMoss extends Module {
         placeTarget = null;
         walkTarget = null;
         exploring = false;
+        hadWork = false;
+        retargetNow = true;
         blacklist.clear();
         lastActionPos = null;
         actionAttempts = 0;
@@ -425,7 +450,13 @@ public class AutoMoss extends Module {
                 mossTarget, clearTarget, placeTarget, azaleaTarget);
         }
 
-        if (baritone.get()) handleRoaming();
+        // Finishing everything in reach is the event that should hand Baritone its next
+        // destination, immediately. Waiting out a timer here is what made it feel stop-start.
+        boolean hasWork = mossTarget != null || clearTarget != null || placeTarget != null;
+        if (hadWork && !hasWork) retargetNow = true;
+        hadWork = hasWork;
+
+        if (baritone.get()) handleRoaming(hasWork);
 
         if (!ready) return;
 
@@ -736,10 +767,10 @@ public class AutoMoss extends Module {
      * bone mealing. A spot we walked all the way to and found nothing at is blacklisted for
      * a minute, otherwise the bot would ping-pong back to the same dead end forever.
      */
-    private void handleRoaming() {
+    private void handleRoaming(boolean hasWork) {
         if (!BaritoneBridge.isUsable()) return;
 
-        if (mossTarget != null || clearTarget != null || placeTarget != null) {
+        if (hasWork) {
             if (walkTarget != null || exploring) {
                 BaritoneBridge.cancel();
                 walkTarget = null;
@@ -748,21 +779,29 @@ public class AutoMoss extends Module {
             return;
         }
 
-        if (walkTimer > 0) {
-            walkTimer--;
-            return;
-        }
+        boolean enRoute = walkTarget != null || exploring;
 
-        // Still on the way and Baritone has not given up: leave it alone.
-        if ((walkTarget != null || exploring) && BaritoneBridge.isPathing()) return;
-
-        // Arrived, or Baritone gave up, and there is still nothing to do here.
-        if (walkTarget != null) {
-            blacklist.put(walkTarget, ticks + VISITED_TIMEOUT);
+        // Arriving, or Baritone giving up, is an event too - react to it on the tick it
+        // happens rather than waiting for the next scheduled look.
+        if (enRoute && !BaritoneBridge.isPathing()) {
+            if (walkTarget != null) blacklist.put(walkTarget, ticks + VISITED_TIMEOUT);
             walkTarget = null;
+            exploring = false;
+            enRoute = false;
+            retargetNow = true;
         }
-        exploring = false;
 
+        if (!retargetNow) {
+            // On the way somewhere: let it walk.
+            if (enRoute) return;
+            // Nothing found last time and nothing has changed: do not hammer the scanner.
+            if (walkTimer > 0) {
+                walkTimer--;
+                return;
+            }
+        }
+
+        retargetNow = false;
         walkTimer = rescanDelay.get() * 20;
 
         BlockPos dest = findRemoteWork();
@@ -805,31 +844,62 @@ public class AutoMoss extends Module {
 
         blacklist.values().removeIf(expiry -> expiry <= ticks);
 
-        Vec3 eye = mc.player.getEyePosition();
+        int n = candidates.size();
         int needed = minConversions.get();
-        BlockPos best = null;
-        int bestValue = 0;
-        double bestDistSq = Double.MAX_VALUE;
+        int[] values = new int[n];
 
-        for (BlockPos pos : candidates) {
+        for (int i = 0; i < n; i++) {
+            BlockPos pos = candidates.get(i);
             if (blacklist.containsKey(pos)) continue;
-
             int value = remoteValue(pos, needed);
-            if (value < needed) continue;
+            if (value >= needed) values[i] = value;
+        }
+
+        Vec3 eye = mc.player.getEyePosition();
+        int reach = clusterRadius.get();
+        int reachSq = reach * reach;
+        int threshold = minCluster.get();
+
+        BlockPos nearestPatch = null;
+        double nearestPatchDistSq = Double.MAX_VALUE;
+        BlockPos nearestAny = null;
+        double nearestAnyDistSq = Double.MAX_VALUE;
+
+        for (int i = 0; i < n; i++) {
+            if (values[i] == 0) continue;
+            BlockPos pos = candidates.get(i);
 
             double dx = pos.getX() + 0.5 - eye.x;
             double dy = pos.getY() + 0.5 - eye.y;
             double dz = pos.getZ() + 0.5 - eye.z;
             double distSq = dx * dx + dy * dy + dz * dz;
 
-            if (value > bestValue || (value == bestValue && distSq < bestDistSq)) {
-                best = pos.immutable();
-                bestValue = value;
-                bestDistSq = distSq;
+            if (distSq < nearestAnyDistSq) {
+                nearestAny = pos;
+                nearestAnyDistSq = distSq;
+            }
+
+            // Cannot beat the patch we already have, so skip the neighbourhood sum.
+            if (distSq >= nearestPatchDistSq) continue;
+
+            int patch = 0;
+            for (int j = 0; j < n; j++) {
+                if (values[j] == 0) continue;
+                BlockPos other = candidates.get(j);
+                int ex = other.getX() - pos.getX();
+                int ey = other.getY() - pos.getY();
+                int ez = other.getZ() - pos.getZ();
+                if (ex * ex + ey * ey + ez * ez <= reachSq) patch += values[j];
+            }
+
+            if (patch >= threshold) {
+                nearestPatch = pos;
+                nearestPatchDistSq = distSq;
             }
         }
 
-        return best;
+        BlockPos chosen = nearestPatch != null ? nearestPatch : nearestAny;
+        return chosen == null ? null : chosen.immutable();
     }
 
     /**
