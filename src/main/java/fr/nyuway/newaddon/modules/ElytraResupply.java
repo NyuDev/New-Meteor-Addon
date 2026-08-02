@@ -1047,11 +1047,19 @@ public class ElytraResupply extends Module {
         //? if >=1.21 {
         var contents = shulker.get(net.minecraft.core.component.DataComponents.CONTAINER);
         if (contents == null) return false;
+        //? if <26.1 {
         for (ItemStack stack : contents.nonEmptyItems()) {
             if (lookFireworks && stack.is(Items.FIREWORK_ROCKET)) return true;
             if (lookBottles && stack.is(Items.EXPERIENCE_BOTTLE)) return true;
             if (lookElytra && stack.is(Items.ELYTRA)) return true;
         }
+        //?} else {
+        /*for (var tmpl : contents.nonEmptyItems()) {
+            if (lookFireworks && tmpl.item().value() == Items.FIREWORK_ROCKET) return true;
+            if (lookBottles && tmpl.item().value() == Items.EXPERIENCE_BOTTLE) return true;
+            if (lookElytra && tmpl.item().value() == Items.ELYTRA) return true;
+        }
+        *///?}
         return false;
         //?} else {
         /*var tag = shulker.getTag();
