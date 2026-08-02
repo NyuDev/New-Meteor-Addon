@@ -91,8 +91,15 @@ public class AutoMoss extends Module {
     /** Bone meals spent on one block before giving up on it and blacklisting it. */
     private static final int MAX_ATTEMPTS = 4;
 
-    /** Radians between successive explore headings, so they spread instead of overlapping. */
-    private static final double GOLDEN_ANGLE = Math.PI * (3.0 - Math.sqrt(5.0));
+    /**
+     * How far the explore heading turns after a leg that found nothing. Deliberately small:
+     * a big turn sends the bot back across ground it just covered, which reads as wandering
+     * off in the opposite direction. Small turns sweep outward instead.
+     */
+    private static final double EXPLORE_TURN = Math.toRadians(40.0);
+
+    /** Chunk radius the search widens to before giving up and exploring. */
+    private static final int WIDE_SEARCH_CHUNKS = 16;
 
     private final SettingGroup sgGeneral = settings.getDefaultGroup();
     private final SettingGroup sgClear = settings.createGroup("Obstructions");
@@ -785,6 +792,8 @@ public class AutoMoss extends Module {
         // happens rather than waiting for the next scheduled look.
         if (enRoute && !BaritoneBridge.isPathing()) {
             if (walkTarget != null) blacklist.put(walkTarget, ticks + VISITED_TIMEOUT);
+            // A leg that ended with nothing found: turn a little before the next one.
+            if (exploring) exploreBearing += EXPLORE_TURN;
             walkTarget = null;
             exploring = false;
             enRoute = false;
@@ -792,9 +801,11 @@ public class AutoMoss extends Module {
         }
 
         if (!retargetNow) {
-            // On the way somewhere: let it walk.
-            if (enRoute) return;
-            // Nothing found last time and nothing has changed: do not hammer the scanner.
+            // Committed to a real target: let it walk.
+            if (walkTarget != null) return;
+            // Exploring, or idle: keep looking on the cooldown. Exploring especially must
+            // keep scanning, otherwise the bot commits to a long leg and walks straight past
+            // convertible stone it should have stopped for.
             if (walkTimer > 0) {
                 walkTimer--;
                 return;
@@ -806,25 +817,28 @@ public class AutoMoss extends Module {
 
         BlockPos dest = findRemoteWork();
         if (dest != null) {
+            // Found real work, including part-way through an explore leg: drop the sweep and
+            // go to it. This is what stops the bot marching past convertible stone.
             walkTarget = dest;
+            exploring = false;
             BaritoneBridge.pathTo(dest, 2);
             if (debug.get()) log("walking to %s", dest);
             return;
         }
 
-        // Nothing worth converting anywhere in range. Standing still here achieves nothing,
-        // so strike out and let the next scan run somewhere completely different. Covering
-        // ground is the whole point once the local moss is exhausted.
+        // Already sweeping and still nothing found: carry straight on rather than re-issuing
+        // the same goal, which would stutter the path every cooldown.
+        if (exploring) return;
+
+        // Nothing worth converting anywhere in range. Standing still achieves nothing, so
+        // sweep outward on the current heading until something turns up.
         if (explore.get()) {
-            // Fan out by the golden angle rather than picking at random: successive attempts
-            // spread evenly instead of occasionally doubling back on each other.
-            exploreBearing += GOLDEN_ANGLE;
             int distance = exploreDistance.get();
             int x = Mth.floor(mc.player.getX() + Math.cos(exploreBearing) * distance);
             int z = Mth.floor(mc.player.getZ() + Math.sin(exploreBearing) * distance);
 
             exploring = BaritoneBridge.exploreTo(x, z);
-            if (debug.get()) log("nothing nearby, exploring toward %d %d", x, z);
+            if (debug.get()) log("nothing nearby, sweeping toward %d %d", x, z);
         } else if (debug.get()) {
             log("no reachable moss worth walking to (explore is off)");
         }
@@ -838,8 +852,19 @@ public class AutoMoss extends Module {
      * single block, and it keeps the bot away from moss that is already surrounded by moss.
      */
     private BlockPos findRemoteWork() {
-        List<BlockPos> candidates =
-            BaritoneBridge.scanFor(Blocks.MOSS_BLOCK, 64, 32, searchChunks.get());
+        int near = searchChunks.get();
+        BlockPos found = searchWork(near);
+        if (found != null) return found;
+
+        // Widen before giving up. Wandering off on a blind heading when there is still
+        // convertible stone a bit further out is exactly what makes the bot look lost.
+        int wide = Math.min(near * 3, WIDE_SEARCH_CHUNKS);
+        return wide > near ? searchWork(wide) : null;
+    }
+
+    /** Nearest workable patch within a chunk radius, or null. See {@link #findRemoteWork()}. */
+    private BlockPos searchWork(int chunks) {
+        List<BlockPos> candidates = BaritoneBridge.scanFor(Blocks.MOSS_BLOCK, 128, 48, chunks);
         if (candidates.isEmpty()) return null;
 
         blacklist.values().removeIf(expiry -> expiry <= ticks);

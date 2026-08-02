@@ -146,10 +146,12 @@ Two things keep it from getting stuck, which matters more than raw speed:
 
 - A spot it walked to and found nothing at is ignored for a minute, so it does not ping-pong
   between the same dead ends.
-- When nothing anywhere in `search-chunks` is worth going to - the normal state once the
-  local moss is all surrounded by moss - `explore` sends it somewhere new instead of
-  standing still. Successive headings fan out by the golden angle rather than being random,
-  so it sweeps outward instead of occasionally doubling back.
+- The search **widens** before giving up, out to 16 chunks. Striking out on a blind heading
+  while there is still convertible stone a bit further away is what makes a bot look lost.
+- Only then does `explore` sweep it somewhere new. It **keeps scanning while it walks** and
+  abandons the sweep the moment real work turns up, so it never marches past convertible
+  stone. The heading turns only 40 degrees after a leg that found nothing, so it fans
+  outward rather than doubling back across ground it just covered.
 
 The addon carries **no Baritone dependency at all** - the bridge is pure reflection against
 the `baritone.api` package, which the Meteor fork leaves unminified. That is what lets the
