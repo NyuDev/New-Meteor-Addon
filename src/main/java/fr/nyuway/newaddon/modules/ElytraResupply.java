@@ -28,6 +28,8 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.item.enchantment.Enchantments;
 import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.Vec3;
 
@@ -166,6 +168,8 @@ public class ElytraResupply extends Module {
 
     /** Reused by the spot search so scanning allocates nothing. */
     private final BlockPos.MutableBlockPos scratch = new BlockPos.MutableBlockPos();
+    /** True while Baritone is walking us onto a drop we failed to collect from where we stood. */
+    private boolean walkingToDrop;
 
     private BlockPos chestPos;
     private BlockPos shulkerPos;
@@ -205,9 +209,19 @@ public class ElytraResupply extends Module {
         pickaxeHomeSlot = -1;
         resumeTarget = null;
         needFireworks = needMending = false;
+
+        if (walkingToDrop) {
+            BaritoneBridge.cancel();
+            walkingToDrop = false;
+        }
     }
 
     private void to(Phase next) {
+        // Any phase change ends a walk-to-drop; the next phase drives its own movement.
+        if (walkingToDrop && next != phase) {
+            BaritoneBridge.cancel();
+            walkingToDrop = false;
+        }
         if (debug.get()) log("%s -> %s", phase, next);
         phase = next;
         phaseTicks = 0;
@@ -299,7 +313,7 @@ public class ElytraResupply extends Module {
 
     private void placeChest() {
         if (chestPos == null) {
-            chestPos = findSpot();
+            chestPos = findSpot(false);
             if (chestPos == null) {
                 error("Nowhere safe to place; need solid ground with headroom.");
                 abort();
@@ -387,7 +401,7 @@ public class ElytraResupply extends Module {
 
     private void placeShulker() {
         if (shulkerPos == null) {
-            shulkerPos = findSpot();
+            shulkerPos = findSpot(true);
             if (shulkerPos == null) {
                 error("Nowhere safe to place the shulker.");
                 abort();
@@ -524,10 +538,28 @@ public class ElytraResupply extends Module {
         }
 
         if (mc.level.getBlockState(pos).isAir()) {
-            // Give the item entity a moment to fly into us before declaring success.
+            // Give the item entity a moment to fly into us before declaring anything.
             if (phaseTicks < 20) return;
-            if (!InvUtils.find(expected).found()) warning("Broke it but did not pick it back up.");
-            to(next);
+
+            if (InvUtils.find(expected).found()) {
+                if (walkingToDrop) {
+                    BaritoneBridge.cancel();
+                    walkingToDrop = false;
+                }
+                to(next);
+                return;
+            }
+
+            // Not collected: the drop can be several blocks off, well outside the metre or so
+            // vanilla sucks items in from. Walk onto it rather than shrug and move on - a lost
+            // shulker takes its whole contents with it.
+            if (!walkingToDrop) {
+                walkingToDrop = true;
+                problem("Drop not collected, walking to %s to get it.", pos);
+                BaritoneBridge.pathTo(pos, 0);
+            }
+
+            // Only give up when the phase itself times out, which the caller handles.
             return;
         }
 
@@ -756,7 +788,7 @@ public class ElytraResupply extends Module {
      * touching us. Checking just those meant the chest took one of them and the shulker then
      * had nowhere to go, which is exactly how a run stalled after placing the chest.
      */
-    private BlockPos findSpot() {
+    private BlockPos findSpot(boolean forShulker) {
         BlockPos feet = mc.player.blockPosition();
         BlockPos best = null;
         double bestDist = Double.MAX_VALUE;
@@ -766,7 +798,7 @@ public class ElytraResupply extends Module {
             for (int dy = -2; dy <= 1; dy++) {
                 for (int dz = -radius; dz <= radius; dz++) {
                     scratch.set(feet.getX() + dx, feet.getY() + dy, feet.getZ() + dz);
-                    if (!isUsableSpot(scratch)) continue;
+                    if (!isUsableSpot(scratch, forShulker)) continue;
 
                     // Must be close enough to actually click, not just close enough to see.
                     double dist = mc.player.getEyePosition()
@@ -784,21 +816,55 @@ public class ElytraResupply extends Module {
         return best;
     }
 
-    private boolean isUsableSpot(BlockPos pos) {
+    /**
+     * @param forShulker apply the extra rules a shulker box needs to be openable at all
+     */
+    private boolean isUsableSpot(BlockPos pos, boolean forShulker) {
         if (pos.equals(chestPos) || pos.equals(shulkerPos)) return false;
         if (pos.equals(mc.player.blockPosition())) return false;
+        if (pos.equals(mc.player.blockPosition().above())) return false;
 
         if (!mc.level.getBlockState(pos).isAir()) return false;
-        // Headroom, so a shulker can actually be opened where it stands.
         if (!mc.level.getBlockState(pos.above()).isAir()) return false;
+
+        // Solid floor directly under it, so the block gets placed against the ground and a
+        // shulker ends up facing up. Placed against a wall - or against the ender chest -
+        // it faces sideways and vanilla refuses to open it, because the lid has nowhere
+        // to go. That is what stalled OPEN_SHULKER until the phase timed out.
+        BlockState floor = mc.level.getBlockState(pos.below());
+        if (floor.isAir() || !floor.getFluidState().isEmpty()) return false;
 
         for (int d = 1; d <= voidClearance.get(); d++) {
             if (mc.level.getBlockState(pos.below(d)).isAir()) return false;
         }
+
+        if (forShulker) {
+            // Keep clear of the chest, or the placement clicks its face and the shulker
+            // orients against it.
+            if (chestPos != null && pos.distSqr(chestPos) < 3.0) return false;
+
+            // The lid opens into the block above; vanilla's own check fails if anything
+            // collides there, including us standing on top of it.
+            if (mc.player.getBoundingBox().intersects(new AABB(pos.above()))) return false;
+        }
+
         return true;
     }
 
     private void log(String fmt, Object... args) {
         NewAddon.LOG.info("[ElytraResupply] " + String.format(fmt, args));
+    }
+
+    /**
+     * Says it in chat and writes it to the log.
+     *
+     * <p>Meteor's {@code warning}/{@code error} only reach chat, which means a failed run
+     * leaves nothing behind to read afterwards - the reason the first stall could only be
+     * guessed at from phase transitions.
+     */
+    private void problem(String fmt, Object... args) {
+        String message = String.format(fmt, args);
+        warning(message);
+        NewAddon.LOG.warn("[ElytraResupply] " + message);
     }
 }
