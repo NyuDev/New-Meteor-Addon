@@ -23,7 +23,9 @@ come out of that, and AutoMoss checks all three:
 
 1. **The moss needs air directly above it.** `MossBlock#isValidBonemealTarget` requires the
    block above to be air. Not "not solid" - air. A slab, a torch, water, tall grass, any of
-   them make the moss an invalid target.
+   them make the moss an invalid target. This matters more than it sounds: wild moss is
+   nearly always carpeted in grass, moss carpet or azalea, so most of it is unusable until
+   something clears it. That is what `clear-obstructions` is for.
 
 2. **Stone only converts if it has air above it too.** The patch walks each column around
    the origin, drops down through air, and replaces the first block it lands on. A block
@@ -52,11 +54,54 @@ family. Set `stone-only` if you want to count stone alone.
 | `patch-radius` | 1 | Horizontal radius counted as convertible. See the note below. |
 | `min-conversions` | 1 | Blocks that must actually convert before spending a bone meal. |
 | `stone-only` | off | Count only `#base_stone_overworld`, ignoring the dirt family. |
-| `delay` | 4 | Ticks between two bone meals. |
-| `rotate` | on | Face the moss block before using the item. |
-| `swap-back` | on | Return to your previous hotbar slot after each use. |
+| `delay` | 4 | Ticks between two actions. |
+| `pause-on-killaura` | on | Stop entirely while KillAura is active. |
+| `rotate` | on | Face the block before acting on it. |
+| `swap-back` | on | Return to your previous hotbar slot after each bone meal. |
 | `swing` | on | Swing your hand client-side; off still sends the swing packet. |
-| `render` | on | Highlight the moss block currently targeted. |
+
+**Obstructions**
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `clear-obstructions` | on | Break whatever is covering a moss block so it becomes usable. |
+
+Only blocks that break **instantly** are touched - grass, ferns, flowers, moss carpet,
+azalea bushes. Anything that would mean actually digging is left alone, so this will not
+chew through a slab or a stone floor. A block is only cleared when the moss underneath
+would be worth bone mealing afterwards, so it does not strip decoration for nothing.
+
+**Azalea**
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `grow-azalea` | off | Occasionally bone meal an azalea bush into an azalea tree. |
+| `azalea-interval` | 30s | Seconds between two azalea attempts. |
+| `azalea-spacing` | 4 | Skip a bush when azalea leaves are already this close. 0 disables. |
+
+Off by default, because every bone meal spent on a tree is one not spent converting stone.
+Vanilla's `isBonemealSuccess` for azalea only succeeds about **45%** of the time, so a bush
+normally takes a few attempts - that is vanilla, not a bug. A bush is skipped unless it has
+five air blocks above it, so bone meal is not wasted under a ceiling.
+
+When `grow-azalea` is on, azalea bushes are no longer treated as obstructions - otherwise
+the two options would fight over the same block.
+
+**Render**
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `render` | on | Highlight the block currently targeted. |
+| `shape-mode` | Both | How the highlight is drawn. |
+| `side-color` / `line-color` | green | The bone meal target. |
+| `clear-side-color` / `clear-line-color` | orange | A block about to be cleared away. |
+
+**Debug**
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `debug` | off | Log what the scan finds to the game log. |
+| `debug-interval` | 20 | Ticks between two log lines. |
 
 **About `patch-radius`:** the feature rolls its horizontal radius randomly between 1 and 2
 per use. Radius 1 is what every bone meal is guaranteed to reach, so it is the default and
@@ -64,6 +109,21 @@ the setting that never wastes. Radius 2 also counts the outer ring, which conver
 half the time - faster in a dense farm, slightly wasteful.
 
 Bone meal has to be in your hotbar. AutoMoss swaps to it, uses it, and swaps back.
+
+#### If it looks like nothing is happening
+
+The highlight only draws when there is a target, so "no box" and "no bone meal" are the
+same symptom, not two. Turn `debug` on and watch the game log:
+
+```
+[AutoMoss] moss=12 withAir=0 obstructed=11 tooPoor=0 | target=null clear=... azalea=null
+```
+
+- `moss=0` - no moss in `range` at all.
+- `withAir=0` with `obstructed` high - the moss is covered. Enable `clear-obstructions`.
+- `tooPoor` high - the moss is valid but nothing around it would convert. Everything nearby
+  is already moss, or the stone is buried with no air above it. Try `patch-radius` 2, or
+  lower `min-conversions`.
 
 #### Performance
 
