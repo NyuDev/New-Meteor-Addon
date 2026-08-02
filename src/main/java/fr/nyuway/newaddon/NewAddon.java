@@ -1,7 +1,7 @@
 package fr.nyuway.newaddon;
 
 import fr.nyuway.newaddon.modules.AutoMoss;
-import fr.nyuway.newaddon.modules.Pull;
+import fr.nyuway.newaddon.modules.StasisPull;
 import meteordevelopment.meteorclient.addons.MeteorAddon;
 import meteordevelopment.meteorclient.systems.modules.Category;
 import meteordevelopment.meteorclient.systems.modules.Modules;
@@ -24,7 +24,7 @@ public class NewAddon extends MeteorAddon {
     public void onInitialize() {
         LOG.info("New addon initializing...");
         Modules.get().add(new AutoMoss());
-        Modules.get().add(new Pull());
+        Modules.get().add(new StasisPull());
     }
 
     @Override

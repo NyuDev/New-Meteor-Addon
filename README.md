@@ -49,29 +49,29 @@ idle otherwise. No Baritone dependency at build time (reflection bridge), works 
 If nothing seems to happen, turn `debug` on and read the log line - it tells you exactly
 which check is rejecting everything.
 
-## Pull
+## StasisPull
 
 Asks a stasis bot to pull you home. Acts as a **button**: bind a key, press it, one request
-goes out and the module switches straight back off.
+goes out and the module switches straight back off. Pulls are spaced 5s apart client-side.
 
 | Setting | Default | |
 | --- | --- | --- |
 | `mode` | Chat | `Chat`, `Whisper`, or `Http`. |
-| `cooldown` | 5s | Ignores further presses, so a fumbled bind can't spam. |
 | `notify` | on | Prints what was sent and what the bot answered. |
 | `messages` | `!home` | Trigger words; one is picked at random per pull. |
 | `whisper-command` | `/msg` | Whisper command (`/msg`, `/w`, `/tell`). |
 | `bot-name` | | Account the whisper goes to. |
-| `endpoint` | `localhost:6969` | Bot's control server, `host:port`. |
-| `secret` | | Shared secret, identical to the bot's. |
-| `pull-name` | | Account to pull. Blank uses your own name. |
+| `endpoint` | `http://localhost:6969` | Full URL of the bot's control server. |
+| `secret` | | Shared secret, identical to the bot's. Masked on screen. |
+
+The account pulled is always the one you are logged in as.
 
 `Http` speaks [StasisBot](https://github.com/NyuDev/StasisBot)'s encrypted control channel:
 an AES-256-GCM sealed `HOMEREQ` frame POSTed to `/ctl`, with a 45s replay window. Nothing
 goes through the game server, so there is nothing to see, log, or rate-limit.
 
-The secret is stored in plain text in your Meteor config, like every other setting. Do not
-reuse a password there.
+The secret is masked in the settings panel, but Meteor still stores every setting in plain
+text in its config. Do not reuse a password there.
 
 ## Supported versions
 

@@ -2,10 +2,10 @@ package fr.nyuway.newaddon.modules;
 
 import fr.nyuway.newaddon.NewAddon;
 import fr.nyuway.newaddon.compat.StasisControl;
+import fr.nyuway.newaddon.gui.PasswordRenderer;
 import meteordevelopment.meteorclient.events.world.TickEvent;
 import meteordevelopment.meteorclient.settings.BoolSetting;
 import meteordevelopment.meteorclient.settings.EnumSetting;
-import meteordevelopment.meteorclient.settings.IntSetting;
 import meteordevelopment.meteorclient.settings.Setting;
 import meteordevelopment.meteorclient.settings.SettingGroup;
 import meteordevelopment.meteorclient.settings.StringListSetting;
@@ -18,16 +18,16 @@ import java.util.List;
 import java.util.concurrent.ThreadLocalRandom;
 
 /**
- * Pull - asks a stasis bot to pull you home, however you like to ask.
+ * StasisPull - asks a stasis bot to pull you home, however you like to ask.
  *
- * <p>Acts as a button rather than a toggle: binding a key and pressing it fires one request
- * and switches the module straight back off.
+ * <p>Acts as a button rather than a toggle: bind a key, press it, one request goes out and
+ * the module switches straight back off.
  *
  * <p>Three ways to ask, because they suit different setups:
  * <ul>
- *   <li>{@code Chat} - say a trigger word in public chat. Simplest, works with any bot that
- *       watches chat, but everyone sees it.</li>
- *   <li>{@code Whisper} - the same trigger word sent as {@code /msg &lt;bot&gt; &lt;word&gt;}.
+ *   <li>{@code Chat} - say a trigger word in public chat. Works with any bot that watches
+ *       chat, but everyone sees it.</li>
+ *   <li>{@code Whisper} - the same word sent as {@code /msg &lt;bot&gt; &lt;word&gt;}.
  *       Private, but still a chat packet the server can rate-limit.</li>
  *   <li>{@code Http} - StasisBot's encrypted control channel. Nothing goes through the game
  *       server at all, so there is nothing to see, log, or rate-limit.</li>
@@ -36,7 +36,13 @@ import java.util.concurrent.ThreadLocalRandom;
  * <p>Several trigger words can be listed and one is picked at random per pull, which is how
  * StasisBot itself suggests dodging server anti-spam on repeated identical lines.
  */
-public class Pull extends Module {
+public class StasisPull extends Module {
+
+    /**
+     * Fixed client-side spacing between two pulls. Not a setting: there is no good reason to
+     * ask a bot twice in five seconds, and every reason not to hand the server a burst.
+     */
+    private static final long COOLDOWN_MS = 5_000L;
 
     public enum Mode {
         /** Say a trigger word in public chat. */
@@ -56,13 +62,6 @@ public class Pull extends Module {
         .description("How to ask the bot. Http goes straight to StasisBot and never touches " +
                      "the game server.")
         .defaultValue(Mode.Chat)
-        .build());
-
-    private final Setting<Integer> cooldown = sgGeneral.add(new IntSetting.Builder()
-        .name("cooldown")
-        .description("Seconds to ignore further presses, so a fumbled keybind does not spam " +
-                     "the bot or the server.")
-        .defaultValue(5).min(0).max(60).sliderMin(0).sliderMax(30)
         .build());
 
     private final Setting<Boolean> notify = sgGeneral.add(new BoolSetting.Builder()
@@ -95,31 +94,27 @@ public class Pull extends Module {
 
     private final Setting<String> endpoint = sgHttp.add(new StringSetting.Builder()
         .name("endpoint")
-        .description("host:port of the bot's control server.")
-        .defaultValue("localhost:6969")
+        .description("Full URL of the bot's control server, including the protocol.")
+        .defaultValue("http://localhost:6969")
         .visible(() -> mode.get() == Mode.Http)
+        .wide()
         .build());
 
     private final Setting<String> secret = sgHttp.add(new StringSetting.Builder()
         .name("secret")
-        .description("Shared secret, identical to the bot's. Stored in plain text in your " +
-                     "Meteor config, like every other setting - do not reuse a password here.")
+        .description("Shared secret, identical to the bot's. Hidden on screen, but Meteor " +
+                     "still stores it in plain text in its config like any other setting.")
         .defaultValue("")
         .visible(() -> mode.get() == Mode.Http)
-        .build());
-
-    private final Setting<String> pullName = sgHttp.add(new StringSetting.Builder()
-        .name("pull-name")
-        .description("Account the bot should pull. Blank uses your own name.")
-        .defaultValue("")
-        .visible(() -> mode.get() == Mode.Http)
+        .renderer(PasswordRenderer.class)
+        .wide()
         .build());
 
     private boolean fired;
     private long lastPull;
 
-    public Pull() {
-        super(NewAddon.CATEGORY, "pull",
+    public StasisPull() {
+        super(NewAddon.CATEGORY, "stasis-pull",
             "Asks a stasis bot to pull you home, by chat, whisper, or StasisBot's encrypted API.");
     }
 
@@ -142,11 +137,12 @@ public class Pull extends Module {
         }
     }
 
-    private void pull() {
+    /** Sends one pull request. Public so other modules can trigger it. */
+    public void pull() {
         if (mc.player == null) return;
 
         long now = System.currentTimeMillis();
-        if (now - lastPull < cooldown.get() * 1000L) {
+        if (now - lastPull < COOLDOWN_MS) {
             if (notify.get()) warning("On cooldown.");
             return;
         }
@@ -178,11 +174,9 @@ public class Pull extends Module {
             }
 
             case Http -> {
-                String target = pullName.get().trim();
-                // Entity#getName is stable across every target; the player's game profile
-                // is not reachable the same way from 1.21.10 onward.
-                if (target.isEmpty()) target = mc.player.getName().getString();
-
+                // Entity#getName is stable across every target; the player's game profile is
+                // not reachable the same way from 1.21.10 onward.
+                String target = mc.player.getName().getString();
                 if (notify.get()) info("Asking the bot to pull %s...", target);
 
                 StasisControl.homeRequest(endpoint.get(), secret.get(), target, reply -> {
