@@ -37,6 +37,16 @@ come out of that, and AutoMoss checks all three:
    not count those, because the bone meal would still be consumed to grow decorative
    vegetation and convert nothing.
 
+4. **The patch never touches its corner columns.** `placeGroundPatch` skips them outright,
+   and only places the edge columns with `extraEdgeColumnChance` (0.75). So a moss block
+   whose only nearby stone sits diagonally converts nothing, no matter how many times you
+   bone meal it. AutoMoss does not count corners.
+
+Because the patch rolls its radius and its edge columns at random, no prediction is exact.
+When a target has been bone mealed four times without becoming useless, AutoMoss gives up on
+it and blacklists it for a minute - otherwise the module would pour items into one block
+forever, which from the outside just looks like the bot standing still.
+
 That third point is the reason a "moss has air above it" check on its own is not enough.
 Bone meal is consumed whenever the patch places, even if the only thing it does is sprout
 grass on moss that was already there. So AutoMoss confirms at least `min-conversions`
@@ -60,6 +70,12 @@ family. Set `stone-only` if you want to count stone alone.
 | `swap-back` | on | Return to your previous hotbar slot after each bone meal. |
 | `swing` | on | Swing your hand client-side; off still sends the swing packet. |
 | `auto-refill` | on | Move bone meal up from your inventory when the hotbar runs out. |
+| `place-moss` | off | Put moss blocks from your hotbar down next to exposed stone. |
+
+`place-moss` turns carried moss into new work: it looks for an air pocket that has a floor
+under it, air above it, and stone around it that would convert, then puts a moss block there
+to bone meal. This is the answer to standing in a cave where every moss block is already
+surrounded by moss and nothing is worth an item.
 
 `auto-refill` only ever targets an **empty** hotbar slot, so nothing you are carrying gets
 displaced - in practice that is the slot the last stack ran out from.
@@ -101,6 +117,8 @@ the two options would fight over the same block.
 | `baritone` | off | Walk to moss worth working on when nothing is in reach. |
 | `search-chunks` | 4 | Radius in chunks that Baritone's scanner sweeps for moss. |
 | `rescan-delay` | 3s | Seconds between two searches for somewhere new to go. |
+| `explore` | on | Head somewhere new when nothing nearby is worth working on. |
+| `explore-distance` | 64 | How far to strike out when exploring, in blocks. |
 
 > **This needs the Meteor fork of Baritone** (Fabric mod id `baritone-meteor`), not official
 > Baritone. With official Baritone, or none at all, the option simply stays idle and the rest
@@ -108,9 +126,18 @@ the two options would fight over the same block.
 
 Turned on, AutoMoss becomes a bot: when there is nothing in reach it asks Baritone's own
 chunk scanner for nearby moss, keeps only the positions that would actually convert
-something, and paths to the closest one. Pathing is cancelled the instant real work appears,
-so walking never fights the bone mealing. A spot it walked all the way to and found nothing
-at is ignored for a minute, so it does not ping-pong between the same dead ends.
+something, and paths to the **most productive** one - a spot that turns four blocks is worth
+walking past one that turns a single block. Pathing is cancelled the instant real work
+appears, so walking never fights the bone mealing.
+
+Two things keep it from getting stuck, which matters more than raw speed:
+
+- A spot it walked to and found nothing at is ignored for a minute, so it does not ping-pong
+  between the same dead ends.
+- When nothing anywhere in `search-chunks` is worth going to - the normal state once the
+  local moss is all surrounded by moss - `explore` sends it somewhere new instead of
+  standing still. Successive headings fan out by the golden angle rather than being random,
+  so it sweeps outward instead of occasionally doubling back.
 
 The addon carries **no Baritone dependency at all** - the bridge is pure reflection against
 the `baritone.api` package, which the Meteor fork leaves unminified. That is what lets the

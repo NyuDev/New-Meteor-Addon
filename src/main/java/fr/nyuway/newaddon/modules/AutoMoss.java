@@ -88,6 +88,12 @@ public class AutoMoss extends Module {
     /** Ticks a walked-to spot stays blacklisted after turning out to be a dead end. */
     private static final int VISITED_TIMEOUT = 20 * 60;
 
+    /** Bone meals spent on one block before giving up on it and blacklisting it. */
+    private static final int MAX_ATTEMPTS = 4;
+
+    /** Radians between successive explore headings, so they spread instead of overlapping. */
+    private static final double GOLDEN_ANGLE = Math.PI * (3.0 - Math.sqrt(5.0));
+
     private final SettingGroup sgGeneral = settings.getDefaultGroup();
     private final SettingGroup sgClear = settings.createGroup("Obstructions");
     private final SettingGroup sgAzalea = settings.createGroup("Azalea");
@@ -161,6 +167,14 @@ public class AutoMoss extends Module {
         .defaultValue(true)
         .build());
 
+    private final Setting<Boolean> placeMoss = sgGeneral.add(new BoolSetting.Builder()
+        .name("place-moss")
+        .description("Put moss blocks from your inventory down next to exposed stone, making " +
+                     "a spot that converts where there was nothing to work with. Needs moss " +
+                     "blocks on you; does nothing otherwise.")
+        .defaultValue(false)
+        .build());
+
     private final Setting<Boolean> clearObstructions = sgClear.add(new BoolSetting.Builder()
         .name("clear-obstructions")
         .description("Break the grass, carpet or plant sitting on a moss block when that moss " +
@@ -212,6 +226,21 @@ public class AutoMoss extends Module {
         .description("Seconds between two searches for somewhere new to walk to.")
         .defaultValue(3).min(1).max(30).sliderMin(1).sliderMax(15)
         .visible(baritone::get)
+        .build());
+
+    private final Setting<Boolean> explore = sgBaritone.add(new BoolSetting.Builder()
+        .name("explore")
+        .description("When nothing nearby is worth working on, head somewhere new instead of " +
+                     "standing still. This is what keeps the bot covering ground.")
+        .defaultValue(true)
+        .visible(baritone::get)
+        .build());
+
+    private final Setting<Integer> exploreDistance = sgBaritone.add(new IntSetting.Builder()
+        .name("explore-distance")
+        .description("How far to strike out when exploring, in blocks.")
+        .defaultValue(64).min(16).max(256).sliderMin(32).sliderMax(160)
+        .visible(() -> baritone.get() && explore.get())
         .build());
 
     private final Setting<Boolean> render = sgRender.add(new BoolSetting.Builder()
@@ -283,9 +312,17 @@ public class AutoMoss extends Module {
     private BlockPos azaleaTarget;
     private Block azaleaBlock;
 
+    private BlockPos placeTarget;
+
     /** Where Baritone is currently walking us, and spots that turned out to be dead ends. */
     private BlockPos walkTarget;
-    private final Map<BlockPos, Integer> visited = new HashMap<>();
+    private boolean exploring;
+    private double exploreBearing;
+    private final Map<BlockPos, Integer> blacklist = new HashMap<>();
+
+    /** Guards against pouring bone meal into one block that never changes. */
+    private BlockPos lastActionPos;
+    private int actionAttempts;
 
     private int timer;
     private int azaleaTimer;
@@ -305,8 +342,12 @@ public class AutoMoss extends Module {
         mossTarget = null;
         clearTarget = null;
         azaleaTarget = null;
+        placeTarget = null;
         walkTarget = null;
-        visited.clear();
+        exploring = false;
+        blacklist.clear();
+        lastActionPos = null;
+        actionAttempts = 0;
         timer = 0;
         azaleaTimer = 0;
         walkTimer = 0;
@@ -328,11 +369,13 @@ public class AutoMoss extends Module {
         mossTarget = null;
         clearTarget = null;
         azaleaTarget = null;
+        placeTarget = null;
 
         // Only stop pathing we started ourselves.
-        if (walkTarget != null) {
+        if (walkTarget != null || exploring) {
             BaritoneBridge.cancel();
             walkTarget = null;
+            exploring = false;
         }
     }
 
@@ -341,7 +384,7 @@ public class AutoMoss extends Module {
         if (mc.player == null || mc.level == null) return;
 
         if (pauseOnKillAura.get() && Modules.get().isActive(KillAura.class)) {
-            mossTarget = clearTarget = azaleaTarget = null;
+            mossTarget = clearTarget = azaleaTarget = placeTarget = null;
             return;
         }
 
@@ -356,7 +399,7 @@ public class AutoMoss extends Module {
 
         FindItemResult bonemeal = InvUtils.findInHotbar(Items.BONE_MEAL);
         if (!bonemeal.found()) {
-            mossTarget = clearTarget = azaleaTarget = null;
+            mossTarget = clearTarget = azaleaTarget = placeTarget = null;
 
             if (ready && autoRefill.get() && refillHotbar()) {
                 // Give the move a tick to land before looking for the stack again.
@@ -368,13 +411,18 @@ public class AutoMoss extends Module {
             return;
         }
 
+        if (ticks % 100 == 0) blacklist.values().removeIf(expiry -> expiry <= ticks);
+
+        FindItemResult moss = placeMoss.get() ? InvUtils.findInHotbar(Items.MOSS_BLOCK) : null;
+        boolean hasMoss = moss != null && moss.found();
+
         boolean azaleaDue = growAzalea.get() && azaleaTimer <= 0;
-        scan(azaleaDue);
+        scan(azaleaDue, hasMoss);
 
         if (debugDue()) {
-            log("moss=%d withAir=%d obstructed=%d tooPoor=%d | target=%s clear=%s azalea=%s",
+            log("moss=%d withAir=%d obstructed=%d tooPoor=%d | target=%s clear=%s place=%s azalea=%s",
                 seenMoss, seenMossWithAir, seenMossObstructed, seenMossTooPoor,
-                mossTarget, clearTarget, azaleaTarget);
+                mossTarget, clearTarget, placeTarget, azaleaTarget);
         }
 
         if (baritone.get()) handleRoaming();
@@ -382,22 +430,28 @@ public class AutoMoss extends Module {
         if (!ready) return;
 
         // Azalea is rare by construction, so let it go first when its timer is up.
-        if (azaleaDue && azaleaTarget != null) {
+        if (azaleaDue && azaleaTarget != null && keepTrying(azaleaTarget)) {
             azaleaTimer = azaleaInterval.get() * 20;
             timer = delay.get();
             useBonemeal(azaleaTarget, azaleaBlock);
             return;
         }
 
-        if (mossTarget != null) {
+        if (mossTarget != null && keepTrying(mossTarget)) {
             timer = delay.get();
             useBonemeal(mossTarget, Blocks.MOSS_BLOCK);
             return;
         }
 
-        if (clearTarget != null) {
+        if (clearTarget != null && keepTrying(clearTarget)) {
             timer = delay.get();
             clearBlock(clearTarget);
+            return;
+        }
+
+        if (placeTarget != null && hasMoss && keepTrying(placeTarget)) {
+            timer = delay.get();
+            BlockUtils.place(placeTarget, moss, 50);
         }
     }
 
@@ -412,6 +466,9 @@ public class AutoMoss extends Module {
         if (clearTarget != null) {
             event.renderer.box(clearTarget, clearSideColor.get(), clearLineColor.get(), shapeMode.get(), 0);
         }
+        if (placeTarget != null) {
+            event.renderer.box(placeTarget, sideColor.get(), lineColor.get(), shapeMode.get(), 0);
+        }
     }
 
     /**
@@ -424,10 +481,11 @@ public class AutoMoss extends Module {
      * The pass stops at the first bone meal target unless debug is on, in which case it
      * runs in full so the counters mean something.
      */
-    private void scan(boolean azaleaDue) {
+    private void scan(boolean azaleaDue, boolean wantPlace) {
         mossTarget = null;
         clearTarget = null;
         azaleaTarget = null;
+        placeTarget = null;
         seenMoss = seenMossWithAir = seenMossObstructed = seenMossTooPoor = 0;
 
         int radius = Mth.ceil(range.get());
@@ -462,7 +520,7 @@ public class AutoMoss extends Module {
                     // MossBlock#isValidBonemealTarget is satisfied; is it worth an item?
                     seenMossWithAir++;
                     if (countConversions(x, y + 1, z, needed) >= needed) {
-                        if (mossTarget == null) mossTarget = new BlockPos(x, y, z);
+                        if (mossTarget == null) mossTarget = notBlacklisted(x, y, z);
                     } else {
                         seenMossTooPoor++;
                     }
@@ -472,14 +530,30 @@ public class AutoMoss extends Module {
                     // count is a valid prediction of the post-break result.
                     seenMossObstructed++;
                     if (clearTarget == null && countConversions(x, y + 1, z, needed) >= needed) {
-                        clearTarget = new BlockPos(x, y + 1, z);
+                        clearTarget = notBlacklisted(x, y + 1, z);
                     }
                 }
             } else if (azaleaDue && azaleaTarget == null
                        && (state.is(Blocks.AZALEA) || state.is(Blocks.FLOWERING_AZALEA))) {
                 if (isAzaleaWorthGrowing(x, y, z)) {
-                    azaleaTarget = new BlockPos(x, y, z);
-                    azaleaBlock = state.getBlock();
+                    azaleaTarget = notBlacklisted(x, y, z);
+                    if (azaleaTarget != null) azaleaBlock = state.getBlock();
+                }
+            } else if (wantPlace && placeTarget == null && state.isAir()) {
+                // A spot to drop a moss block so it makes work where there was none.
+                // Cheap gates first: something to stand the block on, and air above so the
+                // moss we place is immediately a valid bone meal target.
+                scanPos.set(x, y - 1, z);
+                if (mc.level.getBlockState(scanPos).isAir()) continue;
+
+                scanPos.set(x, y + 1, z);
+                if (!mc.level.getBlockState(scanPos).isAir()) continue;
+
+                scanPos.set(x, y, z);
+                if (!BlockUtils.canPlace(scanPos)) continue;
+
+                if (countConversions(x, y + 1, z, needed) >= needed) {
+                    placeTarget = notBlacklisted(x, y, z);
                 }
             }
 
@@ -507,6 +581,15 @@ public class AutoMoss extends Module {
 
         for (int dx = -radius; dx <= radius; dx++) {
             for (int dz = -radius; dz <= radius; dz++) {
+                // VegetationPatchFeature never places the four corner columns, and only
+                // places the edges with extraEdgeColumnChance. Counting corners made the
+                // module spend bone meal on targets that could not convert anything.
+                if ((dx == -radius || dx == radius) && (dz == -radius || dz == radius)) continue;
+
+                // The centre column is whatever we are standing the patch on - the moss
+                // itself, or the block we are about to replace with moss. Never a gain.
+                if (dx == 0 && dz == 0) continue;
+
                 int x = ox + dx, z = oz + dz, y = oy;
 
                 int steps = 0;
@@ -533,6 +616,38 @@ public class AutoMoss extends Module {
         }
 
         return found;
+    }
+
+    /** Returns the position, or null when it is on the give-up list. */
+    private BlockPos notBlacklisted(int x, int y, int z) {
+        BlockPos pos = new BlockPos(x, y, z);
+        return blacklist.containsKey(pos) ? null : pos;
+    }
+
+    /**
+     * Records an action against a position and decides whether to keep trying it.
+     *
+     * <p>Prediction can be wrong - the patch rolls a radius and skips edge columns at random,
+     * and the server has the last word. Without this the module would pour bone meal into one
+     * block forever and the bot would never move on, which is exactly what standing still
+     * looks like from the outside.
+     *
+     * @return false once the position has burned through {@link #MAX_ATTEMPTS} and is dropped
+     */
+    private boolean keepTrying(BlockPos pos) {
+        if (pos.equals(lastActionPos)) {
+            if (++actionAttempts > MAX_ATTEMPTS) {
+                blacklist.put(pos.immutable(), ticks + VISITED_TIMEOUT);
+                lastActionPos = null;
+                actionAttempts = 0;
+                if (debug.get()) log("giving up on %s after %d tries", pos, MAX_ATTEMPTS);
+                return false;
+            }
+        } else {
+            lastActionPos = pos.immutable();
+            actionAttempts = 1;
+        }
+        return true;
     }
 
     /** True if the patch would replace this block with moss and that is an actual gain. */
@@ -624,10 +739,11 @@ public class AutoMoss extends Module {
     private void handleRoaming() {
         if (!BaritoneBridge.isUsable()) return;
 
-        if (mossTarget != null || clearTarget != null) {
-            if (walkTarget != null) {
+        if (mossTarget != null || clearTarget != null || placeTarget != null) {
+            if (walkTarget != null || exploring) {
                 BaritoneBridge.cancel();
                 walkTarget = null;
+                exploring = false;
             }
             return;
         }
@@ -638,13 +754,14 @@ public class AutoMoss extends Module {
         }
 
         // Still on the way and Baritone has not given up: leave it alone.
-        if (walkTarget != null && BaritoneBridge.isPathing()) return;
+        if ((walkTarget != null || exploring) && BaritoneBridge.isPathing()) return;
 
         // Arrived, or Baritone gave up, and there is still nothing to do here.
         if (walkTarget != null) {
-            visited.put(walkTarget, ticks + VISITED_TIMEOUT);
+            blacklist.put(walkTarget, ticks + VISITED_TIMEOUT);
             walkTarget = null;
         }
+        exploring = false;
 
         walkTimer = rescanDelay.get() * 20;
 
@@ -653,56 +770,85 @@ public class AutoMoss extends Module {
             walkTarget = dest;
             BaritoneBridge.pathTo(dest, 2);
             if (debug.get()) log("walking to %s", dest);
+            return;
+        }
+
+        // Nothing worth converting anywhere in range. Standing still here achieves nothing,
+        // so strike out and let the next scan run somewhere completely different. Covering
+        // ground is the whole point once the local moss is exhausted.
+        if (explore.get()) {
+            // Fan out by the golden angle rather than picking at random: successive attempts
+            // spread evenly instead of occasionally doubling back on each other.
+            exploreBearing += GOLDEN_ANGLE;
+            int distance = exploreDistance.get();
+            int x = Mth.floor(mc.player.getX() + Math.cos(exploreBearing) * distance);
+            int z = Mth.floor(mc.player.getZ() + Math.sin(exploreBearing) * distance);
+
+            exploring = BaritoneBridge.exploreTo(x, z);
+            if (debug.get()) log("nothing nearby, exploring toward %d %d", x, z);
         } else if (debug.get()) {
-            log("no reachable moss worth walking to");
+            log("no reachable moss worth walking to (explore is off)");
         }
     }
 
-    /** Closest scanned moss position that would actually be worth standing next to. */
+    /**
+     * Best scanned moss position to go and work on.
+     *
+     * <p>Ranked by how much it would actually convert, not merely by how close it is. Walking
+     * an extra ten blocks to a spot that turns four blocks beats standing on one that turns a
+     * single block, and it keeps the bot away from moss that is already surrounded by moss.
+     */
     private BlockPos findRemoteWork() {
         List<BlockPos> candidates =
             BaritoneBridge.scanFor(Blocks.MOSS_BLOCK, 64, 32, searchChunks.get());
         if (candidates.isEmpty()) return null;
 
-        visited.values().removeIf(expiry -> expiry <= ticks);
+        blacklist.values().removeIf(expiry -> expiry <= ticks);
 
         Vec3 eye = mc.player.getEyePosition();
         int needed = minConversions.get();
         BlockPos best = null;
+        int bestValue = 0;
         double bestDistSq = Double.MAX_VALUE;
 
         for (BlockPos pos : candidates) {
-            if (visited.containsKey(pos)) continue;
+            if (blacklist.containsKey(pos)) continue;
+
+            int value = remoteValue(pos, needed);
+            if (value < needed) continue;
 
             double dx = pos.getX() + 0.5 - eye.x;
             double dy = pos.getY() + 0.5 - eye.y;
             double dz = pos.getZ() + 0.5 - eye.z;
             double distSq = dx * dx + dy * dy + dz * dz;
-            if (distSq >= bestDistSq) continue;
 
-            if (!isRemoteWorthIt(pos, needed)) continue;
-
-            best = pos.immutable();
-            bestDistSq = distSq;
+            if (value > bestValue || (value == bestValue && distSq < bestDistSq)) {
+                best = pos.immutable();
+                bestValue = value;
+                bestDistSq = distSq;
+            }
         }
 
         return best;
     }
 
     /**
-     * Same test as the in-reach scan, but tolerant of moss that is still covered: by the
-     * time we walk there, {@code clear-obstructions} will have uncovered it.
+     * How many blocks working this position would convert, or 0 if it is not workable.
+     *
+     * <p>Same test as the in-reach scan but tolerant of moss that is still covered: by the
+     * time we walk there, {@code clear-obstructions} will have uncovered it. Counts in full
+     * rather than stopping at the threshold, because the number is used for ranking.
      */
-    private boolean isRemoteWorthIt(BlockPos pos, int needed) {
+    private int remoteValue(BlockPos pos, int needed) {
         int x = pos.getX(), y = pos.getY(), z = pos.getZ();
 
         auxPos.set(x, y + 1, z);
         BlockState above = mc.level.getBlockState(auxPos);
         if (!above.isAir() && !(clearObstructions.get() && isClearable(auxPos, above))) {
-            return false;
+            return 0;
         }
 
-        return countConversions(x, y + 1, z, needed) >= needed;
+        return countConversions(x, y + 1, z, Integer.MAX_VALUE);
     }
 
     private void useBonemeal(BlockPos pos, Block expected) {

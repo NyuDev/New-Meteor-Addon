@@ -44,6 +44,7 @@ public final class BaritoneBridge {
     private static Method mCancelEverything;
     private static Method mIsPathing;
     private static Constructor<?> cGoalNear;
+    private static Constructor<?> cGoalXZ;
 
     private BaritoneBridge() {
     }
@@ -102,6 +103,24 @@ public final class BaritoneBridge {
         }
     }
 
+    /**
+     * Sends Baritone walking to a horizontal coordinate, ignoring height. Used to cover
+     * ground when there is nothing worth pathing to precisely.
+     */
+    public static boolean exploreTo(int x, int z) {
+        if (!isUsable()) return false;
+
+        try {
+            Object baritone = mGetPrimaryBaritone.invoke(provider);
+            Object process = mGetCustomGoalProcess.invoke(baritone);
+            mSetGoalAndPath.invoke(process, cGoalXZ.newInstance(x, z));
+            return true;
+        } catch (Throwable t) {
+            fail("exploreTo failed", t);
+            return false;
+        }
+    }
+
     /** Stops whatever Baritone is currently doing. */
     public static void cancel() {
         if (!isUsable()) return;
@@ -140,6 +159,7 @@ public final class BaritoneBridge {
             Class<?> ctxClass = Class.forName("baritone.api.utils.IPlayerContext");
             Class<?> goalClass = Class.forName("baritone.api.pathing.goals.Goal");
             Class<?> goalNearClass = Class.forName("baritone.api.pathing.goals.GoalNear");
+            Class<?> goalXZClass = Class.forName("baritone.api.pathing.goals.GoalXZ");
             Class<?> customGoalClass = Class.forName("baritone.api.process.ICustomGoalProcess");
             Class<?> pathingClass = Class.forName("baritone.api.behavior.IPathingBehavior");
 
@@ -160,6 +180,7 @@ public final class BaritoneBridge {
             mCancelEverything = pathingClass.getMethod("cancelEverything");
             mIsPathing = pathingClass.getMethod("isPathing");
             cGoalNear = goalNearClass.getConstructor(BlockPos.class, int.class);
+            cGoalXZ = goalXZClass.getConstructor(int.class, int.class);
 
             usable = true;
         } catch (Throwable t) {
