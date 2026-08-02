@@ -3,6 +3,9 @@ build/
 versions/*/build/
 versions/*/.gradle/
 run/
+run2/
+versions/*/run/
+versions/*/run2/
 *.jar
 !gradle/wrapper/gradle-wrapper.jar
 .idea/
