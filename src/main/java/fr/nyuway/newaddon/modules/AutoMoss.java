@@ -140,6 +140,13 @@ public class AutoMoss extends Module {
         .defaultValue(true)
         .build());
 
+    private final Setting<Boolean> autoRefill = sgGeneral.add(new BoolSetting.Builder()
+        .name("auto-refill")
+        .description("When the hotbar runs out of bone meal, move a stack up from your " +
+                     "inventory into a free hotbar slot.")
+        .defaultValue(true)
+        .build());
+
     private final Setting<Boolean> swing = sgGeneral.add(new BoolSetting.Builder()
         .name("swing")
         .description("Swing your hand client-side. Off still sends the swing packet.")
@@ -165,7 +172,7 @@ public class AutoMoss extends Module {
         .name("azalea-interval")
         .description("Seconds between two azalea attempts. Vanilla only succeeds about 45% of " +
                      "the time, so a bush usually takes a few tries.")
-        .defaultValue(30).min(1).max(300).sliderMin(5).sliderMax(120)
+        .defaultValue(15).min(1).max(300).sliderMin(5).sliderMax(120)
         .visible(growAzalea::get)
         .build());
 
@@ -173,7 +180,7 @@ public class AutoMoss extends Module {
         .name("azalea-spacing")
         .description("Skip a bush when azalea leaves are already within this many blocks, so " +
                      "trees do not crowd each other. 0 disables the check.")
-        .defaultValue(4).min(0).max(8).sliderMin(0).sliderMax(8)
+        .defaultValue(3).min(0).max(8).sliderMin(0).sliderMax(8)
         .visible(growAzalea::get)
         .build());
 
@@ -301,7 +308,14 @@ public class AutoMoss extends Module {
         FindItemResult bonemeal = InvUtils.findInHotbar(Items.BONE_MEAL);
         if (!bonemeal.found()) {
             mossTarget = clearTarget = azaleaTarget = null;
-            if (debugDue()) log("idle: no bone meal in hotbar");
+
+            if (ready && autoRefill.get() && refillHotbar()) {
+                // Give the move a tick to land before looking for the stack again.
+                timer = delay.get();
+                if (debug.get()) log("refilled bone meal from inventory");
+            } else if (debugDue()) {
+                log("idle: no bone meal in hotbar");
+            }
             return;
         }
 
@@ -482,18 +496,46 @@ public class AutoMoss extends Module {
 
     /**
      * True if this block may be swept off a moss block. Restricted to blocks that break
-     * instantly, which covers grass, ferns, flowers, moss carpet and azalea bushes while
-     * never touching anything that would mean actually digging.
+     * instantly, which covers grass, ferns, flowers and azalea bushes while never touching
+     * anything that would mean actually digging.
      */
     private boolean isClearable(BlockPos pos, BlockState state) {
         if (state.isAir()) return false;
         // Fluids have no collision and cannot be broken.
         if (!state.getFluidState().isEmpty()) return false;
+        // Carpets are cheap but not instant, so they stall the module mid-break. Skipped
+        // explicitly rather than relying on the tool-dependent instant-break check.
+        if (state.is(Blocks.MOSS_CARPET) || state.is(BlockTags.WOOL_CARPETS)) return false;
         // Keep the bushes we are farming into trees.
         if (growAzalea.get() && (state.is(Blocks.AZALEA) || state.is(Blocks.FLOWERING_AZALEA))) {
             return false;
         }
         return BlockUtils.canBreak(pos, state) && BlockUtils.canInstaBreak(pos);
+    }
+
+    /**
+     * Moves a stack of bone meal from the main inventory into a free hotbar slot.
+     *
+     * <p>Only ever targets an empty slot, so nothing already in the hotbar is displaced -
+     * in practice that is the slot the last stack was used up from.
+     *
+     * @return true when a move was issued, so the caller can let it land before acting
+     */
+    private boolean refillHotbar() {
+        FindItemResult stack = InvUtils.find(Items.BONE_MEAL);
+        if (!stack.found() || stack.isHotbar()) return false;
+
+        int free = -1;
+        for (int i = 0; i < 9; i++) {
+            if (mc.player.getInventory().getItem(i).isEmpty()) {
+                free = i;
+                break;
+            }
+        }
+        if (free == -1) return false;
+
+        InvUtils.move().from(stack.slot()).toHotbar(free);
+        return true;
     }
 
     /** True if an azalea here has room to become a tree and is not crowding another one. */
