@@ -1,6 +1,7 @@
 package fr.nyuway.newaddon.modules;
 
 import fr.nyuway.newaddon.NewAddon;
+import fr.nyuway.newaddon.compat.BaritoneBridge;
 import meteordevelopment.meteorclient.events.render.Render3DEvent;
 import meteordevelopment.meteorclient.events.world.TickEvent;
 import meteordevelopment.meteorclient.renderer.ShapeMode;
@@ -33,6 +34,9 @@ import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.Vec3;
 
 import java.util.Arrays;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 
 /**
  * AutoMoss - bone meals moss blocks, but only when it actually converts something.
@@ -81,9 +85,13 @@ public class AutoMoss extends Module {
     /** Air an azalea needs above it before growing one into a tree is worth a bone meal. */
     private static final int AZALEA_HEADROOM = 5;
 
+    /** Ticks a walked-to spot stays blacklisted after turning out to be a dead end. */
+    private static final int VISITED_TIMEOUT = 20 * 60;
+
     private final SettingGroup sgGeneral = settings.getDefaultGroup();
     private final SettingGroup sgClear = settings.createGroup("Obstructions");
     private final SettingGroup sgAzalea = settings.createGroup("Azalea");
+    private final SettingGroup sgBaritone = settings.createGroup("Baritone");
     private final SettingGroup sgRender = settings.createGroup("Render");
     private final SettingGroup sgDebug = settings.createGroup("Debug");
 
@@ -184,6 +192,28 @@ public class AutoMoss extends Module {
         .visible(growAzalea::get)
         .build());
 
+    private final Setting<Boolean> baritone = sgBaritone.add(new BoolSetting.Builder()
+        .name("baritone")
+        .description("Walk to moss worth working on when nothing is in reach, turning the " +
+                     "module into a bot. Needs Meteor's Baritone fork (mod id baritone-meteor); " +
+                     "official Baritone will not work.")
+        .defaultValue(false)
+        .build());
+
+    private final Setting<Integer> searchChunks = sgBaritone.add(new IntSetting.Builder()
+        .name("search-chunks")
+        .description("Radius in chunks that Baritone's scanner sweeps looking for moss.")
+        .defaultValue(4).min(1).max(16).sliderMin(1).sliderMax(8)
+        .visible(baritone::get)
+        .build());
+
+    private final Setting<Integer> rescanDelay = sgBaritone.add(new IntSetting.Builder()
+        .name("rescan-delay")
+        .description("Seconds between two searches for somewhere new to walk to.")
+        .defaultValue(3).min(1).max(30).sliderMin(1).sliderMax(15)
+        .visible(baritone::get)
+        .build());
+
     private final Setting<Boolean> render = sgRender.add(new BoolSetting.Builder()
         .name("render")
         .description("Highlight the block currently being targeted.")
@@ -253,8 +283,13 @@ public class AutoMoss extends Module {
     private BlockPos azaleaTarget;
     private Block azaleaBlock;
 
+    /** Where Baritone is currently walking us, and spots that turned out to be dead ends. */
+    private BlockPos walkTarget;
+    private final Map<BlockPos, Integer> visited = new HashMap<>();
+
     private int timer;
     private int azaleaTimer;
+    private int walkTimer;
     private int ticks;
 
     // Scan counters, only meaningful when debug is on (the scan runs in full then).
@@ -270,13 +305,21 @@ public class AutoMoss extends Module {
         mossTarget = null;
         clearTarget = null;
         azaleaTarget = null;
+        walkTarget = null;
+        visited.clear();
         timer = 0;
         azaleaTimer = 0;
+        walkTimer = 0;
         ticks = 0;
         builtRadius = -1;
 
-        if (mc.player != null && !InvUtils.findInHotbar(Items.BONE_MEAL).found()) {
-            warning("No bone meal in your hotbar.");
+        if (mc.player != null && !InvUtils.findInHotbar(Items.BONE_MEAL).found()
+            && !(autoRefill.get() && InvUtils.find(Items.BONE_MEAL).found())) {
+            warning("No bone meal in your inventory.");
+        }
+
+        if (baritone.get() && !BaritoneBridge.isPresent()) {
+            warning("Baritone control needs Meteor's Baritone fork, which is not installed.");
         }
     }
 
@@ -285,6 +328,12 @@ public class AutoMoss extends Module {
         mossTarget = null;
         clearTarget = null;
         azaleaTarget = null;
+
+        // Only stop pathing we started ourselves.
+        if (walkTarget != null) {
+            BaritoneBridge.cancel();
+            walkTarget = null;
+        }
     }
 
     @EventHandler
@@ -327,6 +376,8 @@ public class AutoMoss extends Module {
                 seenMoss, seenMossWithAir, seenMossObstructed, seenMossTooPoor,
                 mossTarget, clearTarget, azaleaTarget);
         }
+
+        if (baritone.get()) handleRoaming();
 
         if (!ready) return;
 
@@ -561,6 +612,97 @@ public class AutoMoss extends Module {
         }
 
         return true;
+    }
+
+    /**
+     * Keeps the player moving toward somewhere worth working when nothing is in reach.
+     *
+     * <p>Baritone is cancelled the instant real work shows up, so pathing never fights the
+     * bone mealing. A spot we walked all the way to and found nothing at is blacklisted for
+     * a minute, otherwise the bot would ping-pong back to the same dead end forever.
+     */
+    private void handleRoaming() {
+        if (!BaritoneBridge.isUsable()) return;
+
+        if (mossTarget != null || clearTarget != null) {
+            if (walkTarget != null) {
+                BaritoneBridge.cancel();
+                walkTarget = null;
+            }
+            return;
+        }
+
+        if (walkTimer > 0) {
+            walkTimer--;
+            return;
+        }
+
+        // Still on the way and Baritone has not given up: leave it alone.
+        if (walkTarget != null && BaritoneBridge.isPathing()) return;
+
+        // Arrived, or Baritone gave up, and there is still nothing to do here.
+        if (walkTarget != null) {
+            visited.put(walkTarget, ticks + VISITED_TIMEOUT);
+            walkTarget = null;
+        }
+
+        walkTimer = rescanDelay.get() * 20;
+
+        BlockPos dest = findRemoteWork();
+        if (dest != null) {
+            walkTarget = dest;
+            BaritoneBridge.pathTo(dest, 2);
+            if (debug.get()) log("walking to %s", dest);
+        } else if (debug.get()) {
+            log("no reachable moss worth walking to");
+        }
+    }
+
+    /** Closest scanned moss position that would actually be worth standing next to. */
+    private BlockPos findRemoteWork() {
+        List<BlockPos> candidates =
+            BaritoneBridge.scanFor(Blocks.MOSS_BLOCK, 64, 32, searchChunks.get());
+        if (candidates.isEmpty()) return null;
+
+        visited.values().removeIf(expiry -> expiry <= ticks);
+
+        Vec3 eye = mc.player.getEyePosition();
+        int needed = minConversions.get();
+        BlockPos best = null;
+        double bestDistSq = Double.MAX_VALUE;
+
+        for (BlockPos pos : candidates) {
+            if (visited.containsKey(pos)) continue;
+
+            double dx = pos.getX() + 0.5 - eye.x;
+            double dy = pos.getY() + 0.5 - eye.y;
+            double dz = pos.getZ() + 0.5 - eye.z;
+            double distSq = dx * dx + dy * dy + dz * dz;
+            if (distSq >= bestDistSq) continue;
+
+            if (!isRemoteWorthIt(pos, needed)) continue;
+
+            best = pos.immutable();
+            bestDistSq = distSq;
+        }
+
+        return best;
+    }
+
+    /**
+     * Same test as the in-reach scan, but tolerant of moss that is still covered: by the
+     * time we walk there, {@code clear-obstructions} will have uncovered it.
+     */
+    private boolean isRemoteWorthIt(BlockPos pos, int needed) {
+        int x = pos.getX(), y = pos.getY(), z = pos.getZ();
+
+        auxPos.set(x, y + 1, z);
+        BlockState above = mc.level.getBlockState(auxPos);
+        if (!above.isAir() && !(clearObstructions.get() && isClearable(auxPos, above))) {
+            return false;
+        }
+
+        return countConversions(x, y + 1, z, needed) >= needed;
     }
 
     private void useBonemeal(BlockPos pos, Block expected) {

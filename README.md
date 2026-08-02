@@ -59,6 +59,10 @@ family. Set `stone-only` if you want to count stone alone.
 | `rotate` | on | Face the block before acting on it. |
 | `swap-back` | on | Return to your previous hotbar slot after each bone meal. |
 | `swing` | on | Swing your hand client-side; off still sends the swing packet. |
+| `auto-refill` | on | Move bone meal up from your inventory when the hotbar runs out. |
+
+`auto-refill` only ever targets an **empty** hotbar slot, so nothing you are carrying gets
+displaced - in practice that is the slot the last stack ran out from.
 
 **Obstructions**
 
@@ -66,10 +70,13 @@ family. Set `stone-only` if you want to count stone alone.
 | --- | --- | --- |
 | `clear-obstructions` | on | Break whatever is covering a moss block so it becomes usable. |
 
-Only blocks that break **instantly** are touched - grass, ferns, flowers, moss carpet,
-azalea bushes. Anything that would mean actually digging is left alone, so this will not
-chew through a slab or a stone floor. A block is only cleared when the moss underneath
-would be worth bone mealing afterwards, so it does not strip decoration for nothing.
+Only blocks that break **instantly** are touched - grass, ferns, flowers, azalea bushes.
+Anything that would mean actually digging is left alone, so this will not chew through a
+slab or a stone floor. A block is only cleared when the moss underneath would be worth bone
+mealing afterwards, so it does not strip decoration for nothing.
+
+Carpets are skipped on purpose. They are cheap but not instant, so the module would stall
+part-way through breaking one instead of getting on with the next target.
 
 **Azalea**
 
@@ -86,6 +93,28 @@ five air blocks above it, so bone meal is not wasted under a ceiling.
 
 When `grow-azalea` is on, azalea bushes are no longer treated as obstructions - otherwise
 the two options would fight over the same block.
+
+**Baritone**
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `baritone` | off | Walk to moss worth working on when nothing is in reach. |
+| `search-chunks` | 4 | Radius in chunks that Baritone's scanner sweeps for moss. |
+| `rescan-delay` | 3s | Seconds between two searches for somewhere new to go. |
+
+> **This needs the Meteor fork of Baritone** (Fabric mod id `baritone-meteor`), not official
+> Baritone. With official Baritone, or none at all, the option simply stays idle and the rest
+> of the module works normally.
+
+Turned on, AutoMoss becomes a bot: when there is nothing in reach it asks Baritone's own
+chunk scanner for nearby moss, keeps only the positions that would actually convert
+something, and paths to the closest one. Pathing is cancelled the instant real work appears,
+so walking never fights the bone mealing. A spot it walked all the way to and found nothing
+at is ignored for a minute, so it does not ping-pong between the same dead ends.
+
+The addon carries **no Baritone dependency at all** - the bridge is pure reflection against
+the `baritone.api` package, which the Meteor fork leaves unminified. That is what lets the
+same source compile for Minecraft 1.20.1, which has no Baritone build at all.
 
 **Render**
 
