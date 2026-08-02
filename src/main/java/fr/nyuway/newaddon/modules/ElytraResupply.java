@@ -425,12 +425,15 @@ public class ElytraResupply extends Module {
             return;
         }
 
-        int from = Containers.findInContainer(menu, Containers::isShulker);
+        int from = findUsefulShulker(menu);
         if (from == -1) {
-            // Keep waiting rather than giving up: a slow sync and a genuinely empty chest
-            // look the same on one tick. The phase timeout is what settles it.
+            // Keep waiting on a slow sync; only abort once we know the chest has content.
             if (Containers.isContainerEmpty(menu)) return;
-            error("Ender chest has items but no shulker box in it.");
+            if (Containers.findInContainer(menu, Containers::isShulker) == -1) {
+                error("Ender chest has items but no shulker box in it.");
+            } else {
+                error("No shulker in ender chest contains fireworks, XP bottles, or spare elytras.");
+            }
             abort();
             return;
         }
@@ -993,6 +996,40 @@ public class ElytraResupply extends Module {
         var conn = mc.getConnection();
         if (conn != null) conn.getConnection().disconnect(
             net.minecraft.network.chat.Component.literal("ElytraResupply: trip ended"));
+    }
+
+    private int findUsefulShulker(AbstractContainerMenu menu) {
+        int size = Containers.containerSize(menu);
+        for (int i = 0; i < size; i++) {
+            ItemStack s = menu.slots.get(i).getItem();
+            if (!s.isEmpty() && Containers.isShulker(s) && shulkerHasNeededSupplies(s)) return i;
+        }
+        return -1;
+    }
+
+    /** Checks the stored contents of a shulker box item for at least one needed supply. */
+    private boolean shulkerHasNeededSupplies(ItemStack shulker) {
+        //? if >=1.21 {
+        var contents = shulker.get(net.minecraft.core.component.DataComponents.CONTAINER);
+        if (contents == null) return false;
+        for (ItemStack stack : contents.nonEmptyItems()) {
+            if (needFireworks && stack.is(Items.FIREWORK_ROCKET)) return true;
+            if (needMending && stack.is(Items.EXPERIENCE_BOTTLE)) return true;
+            if (needElytraSwap && stack.is(Items.ELYTRA)) return true;
+        }
+        return false;
+        //?} else {
+        /*var tag = shulker.getTag();
+        if (tag == null || !tag.contains("BlockEntityTag")) return false;
+        var list = tag.getCompound("BlockEntityTag").getList("Items", 10);
+        for (int i = 0; i < list.size(); i++) {
+            var id = list.getCompound(i).getString("id");
+            if (needFireworks && id.equals("minecraft:firework_rocket")) return true;
+            if (needMending && id.equals("minecraft:experience_bottle")) return true;
+            if (needElytraSwap && id.equals("minecraft:elytra")) return true;
+        }
+        return false;
+        *///?}
     }
 
     /** Finds a spare elytra with remaining durability in the main inventory (not armor slot). */
