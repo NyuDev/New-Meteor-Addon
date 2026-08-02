@@ -181,6 +181,16 @@ version at once:
 Jars land in `versions/<mc>/build/libs/`. On Windows, `build.cmd` wraps `gradlew` with the
 JDK and socket settings this project needs - use `build.cmd build` the same way.
 
+To launch a dev client with Meteor and this addon already loaded, **scope the task to one
+version**:
+
+```bash
+./gradlew :1.21.11:runClient
+```
+
+A bare `runClient` propagates to every Stonecutter subproject and starts about a dozen
+Minecraft clients at once.
+
 Building the 26.x targets needs a JDK 25 installed; Gradle's toolchain resolver finds it
 automatically. Everything else builds on JDK 21.
 

@@ -4,10 +4,14 @@ REM New addon build helper.
 REM   * Pins Gradle to PrismLauncher's bundled JDK 21 (system JDK may be newer).
 REM   * Applies the AF_UNIX selector fix this PC's JDK needs (otherwise Gradle's
 REM     forked daemon dies with "SocketException: Invalid argument: connect").
-REM Usage:  build.cmd build      |  build.cmd runClient  |  build.cmd <task>
+REM Usage:  build.cmd build   |  build.cmd ":1.21.11:runClient"  |  build.cmd <task>
 REM
-REM To build ALL versions:  build.cmd chiseledBuild
-REM To build one version:   build.cmd "build[1.21.11]"
+REM To build ALL versions:  build.cmd build
+REM To build one version:   build.cmd ":1.21.11:build"
+REM
+REM WARNING: always scope runClient to one version. A bare `build.cmd runClient`
+REM propagates to every Stonecutter subproject and boots ~12 Minecraft clients at
+REM once. Use ":<mc>:runClient" instead, e.g. ":1.21.11:runClient".
 REM ---------------------------------------------------------------------------
 setlocal
 REM Auto-detect PrismLauncher's bundled JDK 21 via %APPDATA% (no hard-coded user path).
