@@ -1,0 +1,77 @@
+name: Release
+
+# Tag a commit to publish. The tag must match mod_version in gradle.properties,
+# so a release can never ship jars built from a different version:
+#   git tag v0.1.0 && git push origin v0.1.0
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and publish
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDKs
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: |
+            25
+            21
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Check the tag matches mod_version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          version="$(sed -n 's/^mod_version=//p' gradle.properties | tr -d '[:space:]')"
+          if [ "$tag" != "$version" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match mod_version=$version in gradle.properties." >&2
+            echo "Bump one of them so the release and the jars agree." >&2
+            exit 1
+          fi
+          echo "Releasing version $version"
+
+      - name: Build every supported version
+        run: >
+          ./gradlew collectJars --no-daemon --stacktrace
+          -Dorg.gradle.jvmargs=-Xmx4g
+          -Porg.gradle.java.installations.fromEnv=JAVA_HOME_25_X64
+
+      - name: Write release notes
+        run: |
+          {
+            echo "Meteor Client addon. Drop the jar matching your Minecraft version into your"
+            echo "\`mods\` folder, next to Meteor Client itself."
+            echo
+            echo "Every jar is built from the same source against Mojang's official mappings."
+            echo
+            echo "| Minecraft | Jar |"
+            echo "| --- | --- |"
+            for jar in $(ls build/jars/*.jar | sort -V); do
+              name="$(basename "$jar")"
+              mc="${name##*+mc}"
+              mc="${mc%.jar}"
+              echo "| $mc | \`$name\` |"
+            done
+            echo
+            echo "The Baritone option needs Meteor's Baritone fork (mod id \`baritone-meteor\`),"
+            echo "not official Baritone. Without it that option simply stays idle."
+          } > release-notes.md
+          cat release-notes.md
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" build/jars/*.jar \
+            --title "New $GITHUB_REF_NAME" \
+            --notes-file release-notes.md

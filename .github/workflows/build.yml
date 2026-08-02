@@ -1,0 +1,45 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build all Minecraft versions
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDKs
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          # The 26.x nodes target Java 25, everything older targets 21. Gradle itself
+          # runs on the last entry (21, the same as Loom is happiest on) and reaches
+          # the other through the toolchain, see fromEnv below.
+          java-version: |
+            25
+            21
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build every supported version
+        run: >
+          ./gradlew collectJars --no-daemon --stacktrace
+          -Dorg.gradle.jvmargs=-Xmx4g
+          -Porg.gradle.java.installations.fromEnv=JAVA_HOME_25_X64
+
+      - name: Upload jars
+        uses: actions/upload-artifact@v4
+        with:
+          name: new-jars
+          path: build/jars/*.jar
+          if-no-files-found: error

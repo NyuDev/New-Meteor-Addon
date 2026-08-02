@@ -1,5 +1,9 @@
 # New
 
+[![Build](https://github.com/NyuDev/New-Meteor-Addon/actions/workflows/build.yml/badge.svg)](https://github.com/NyuDev/New-Meteor-Addon/actions/workflows/build.yml)
+[![Release](https://img.shields.io/github/v/release/NyuDev/New-Meteor-Addon?sort=semver)](https://github.com/NyuDev/New-Meteor-Addon/releases/latest)
+[![License](https://img.shields.io/github/license/NyuDev/New-Meteor-Addon)](LICENSE)
+
 A [Meteor Client](https://meteorclient.com) addon, built from the official
 [addon template](https://github.com/MeteorDevelopment/meteor-addon-template) and compiled
 for every Minecraft version Meteor supports, from **1.20.1** to **26.1.2**.
@@ -231,7 +235,9 @@ The module is built so a tick costs as little as possible:
 
 1. Install [Fabric Loader](https://fabricmc.net/use/installer) and
    [Meteor Client](https://meteorclient.com/download) for your Minecraft version.
-2. Drop the matching `new-<version>+mc<mc>.jar` into your `mods` folder next to Meteor.
+2. Grab the jar for your Minecraft version from the
+   [latest release](https://github.com/NyuDev/New-Meteor-Addon/releases/latest) and drop it
+   into your `mods` folder next to Meteor.
 3. Launch the game. The modules appear under the **New** category in the Meteor GUI.
 
 The addon requires Meteor Client. It will not load on its own.
@@ -264,6 +270,22 @@ Minecraft clients at once.
 
 Building the 26.x targets needs a JDK 25 installed; Gradle's toolchain resolver finds it
 automatically. Everything else builds on JDK 21.
+
+`./gradlew collectJars` builds everything and gathers the mod jars, without the sources
+jars, into `build/jars/` - that is what CI publishes.
+
+## Releasing
+
+Every push to `main` builds all twelve versions and uploads the jars as a workflow artifact.
+Publishing a release is a tag:
+
+```bash
+git tag v0.1.0 && git push origin v0.1.0
+```
+
+The release workflow refuses the tag if it does not match `mod_version` in
+`gradle.properties`, so a release can never ship jars built from a different version. It then
+builds every target and attaches the twelve jars to a GitHub release.
 
 ## License
 
