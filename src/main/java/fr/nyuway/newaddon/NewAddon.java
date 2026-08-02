@@ -2,6 +2,7 @@ package fr.nyuway.newaddon;
 
 import fr.nyuway.newaddon.modules.AutoMoss;
 import fr.nyuway.newaddon.modules.AutoStasisPull;
+import fr.nyuway.newaddon.modules.StasisProtection;
 import fr.nyuway.newaddon.modules.StasisPull;
 import meteordevelopment.meteorclient.addons.MeteorAddon;
 import meteordevelopment.meteorclient.systems.modules.Category;
@@ -27,6 +28,7 @@ public class NewAddon extends MeteorAddon {
         Modules.get().add(new AutoMoss());
         Modules.get().add(new StasisPull());
         Modules.get().add(new AutoStasisPull());
+        Modules.get().add(new StasisProtection());
     }
 
     @Override

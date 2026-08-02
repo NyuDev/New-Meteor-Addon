@@ -98,6 +98,38 @@ time the pop event itself is processed.
 Separate module rather than a patch into AutoLog's panel: hooking Meteor's own module would
 have to survive twelve Meteor versions, and `AutoLog` has already moved package between them.
 
+## StasisProtection
+
+Refuses to be teleported into an ambush. The attack: someone finds your base, finds the
+stasis chamber you left there, and fires it — you get yanked out of whatever you were doing
+and dropped in front of them, on ground they prepared.
+
+The defence is a **consent key**. Hold it and any teleport is fine, whoever is at the far
+end. Let go, and an unexpected teleport landing you next to someone who is *not* on your
+Meteor friends list gets answered.
+
+| Setting | Default | |
+| --- | --- | --- |
+| `consent-key` | none | Hold to accept being teleported. |
+| `reaction` | Pull | `Pull` (needs StasisPull configured) or `Disconnect`. |
+| `notify` | on | Say what was detected and what was done. |
+| `trust-own-pull` / `own-pull-grace` | on / 30s | Trust a teleport you asked StasisPull for. |
+| `teleport-distance` | 32 | Blocks moved in one tick that count as a teleport. |
+| `danger-range` | 8 | How close a stranger must be to count as an ambush. |
+| `watch-seconds` | 2.5 | How long to keep watching after landing. |
+
+Two details worth knowing:
+
+- **It watches for a moment instead of deciding instantly.** The server sends your new
+  position before the entities around it, so checking on the landing tick would usually see
+  an empty world and never fire.
+- **A pull you requested yourself is trusted**, so pulling home does not trip your own alarm
+  — and neither does the escape pull this module fires, which would otherwise loop.
+
+Teleport detection compares your position tick to tick rather than reading the position
+packet, whose API was reworked in 1.21.2. A world change (portal, respawn, reconnect) resets
+the tracking instead of counting as a teleport.
+
 ## Supported versions
 
 | Minecraft | Meteor | Java |

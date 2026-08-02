@@ -137,6 +137,16 @@ public class StasisPull extends Module {
         }
     }
 
+    /**
+     * When the last pull was requested, in epoch millis, or 0 if never.
+     *
+     * <p>Read by {@link StasisProtection} so a teleport we asked for ourselves is not
+     * mistaken for someone else firing our chamber.
+     */
+    public long lastPullMillis() {
+        return lastPull;
+    }
+
     /** True if the current mode has everything it needs to actually send something. */
     public boolean isConfigured() {
         return switch (mode.get()) {
