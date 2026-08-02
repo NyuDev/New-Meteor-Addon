@@ -43,6 +43,14 @@ loom {
         named("client") {
             programArgs("--username", "Shamallow_")
         }
+        // Second dev client, own run dir so it doesn't fight the default one over
+        // options.txt / world saves, for testing player-to-player interaction locally.
+        create("client2") {
+            client()
+            configName = "Client (SaltyNew)"
+            programArgs("--username", "SaltyNew")
+            runDir("run2")
+        }
     }
 }
 

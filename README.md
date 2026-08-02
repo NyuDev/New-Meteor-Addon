@@ -114,11 +114,23 @@ Meteor friends list gets answered.
 | `reaction` | Pull | `Pull` (needs StasisPull configured) or `Disconnect`. |
 | `notify` | on | Say what was detected and what was done. |
 | `trust-own-pull` / `own-pull-grace` | on / 30s | Trust a teleport you asked StasisPull for. |
+| `trust-own-pearl` / `own-pearl-grace` | on / 6s | Trust a teleport after you threw an ender pearl. |
 | `teleport-distance` | 32 | Blocks moved in one tick that count as a teleport. |
 | `danger-range` | 8 | How close a stranger must be to count as an ambush. |
 | `watch-seconds` | 2.5 | How long to keep watching after landing. |
+| `totem-trigger` | on | A totem pop during the watch window is an ambush by itself. |
 
-Two details worth knowing:
+A few details worth knowing:
+
+- **Your own ender pearls do not trip it.** A pearl looks identical to a stasis pull on the
+  wire - a sudden 30+ block jump - so without this every pearl throw would read as an
+  ambush. Detected from the `ServerboundUseItemPacket` *you* send when right-clicking with a
+  pearl in hand, not from tracking the thrown entity (whose package differs between Minecraft
+  versions and would have needed per-version code). The grace window is consumed the moment
+  it explains a teleport, so a second, real ambush landing seconds after your pearl lands is
+  still caught.
+- **A totem pop is trusted on its own**, without also needing a stranger detected nearby -
+  whoever hit you hard enough to need it may be shooting from outside `danger-range`.
 
 - **It watches for a moment instead of deciding instantly.** The server sends your new
   position before the entities around it, so checking on the landing tick would usually see

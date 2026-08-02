@@ -1,6 +1,7 @@
 package fr.nyuway.newaddon.modules;
 
 import fr.nyuway.newaddon.NewAddon;
+import meteordevelopment.meteorclient.events.packets.PacketEvent;
 import meteordevelopment.meteorclient.events.world.TickEvent;
 import meteordevelopment.meteorclient.settings.BoolSetting;
 import meteordevelopment.meteorclient.settings.DoubleSetting;
@@ -15,7 +16,10 @@ import meteordevelopment.meteorclient.systems.modules.Modules;
 import meteordevelopment.meteorclient.utils.misc.Keybind;
 import meteordevelopment.orbit.EventHandler;
 import net.minecraft.network.chat.Component;
+import net.minecraft.network.protocol.game.ClientboundEntityEventPacket;
+import net.minecraft.network.protocol.game.ServerboundUseItemPacket;
 import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.item.Items;
 import net.minecraft.world.level.Level;
 
 /**
@@ -31,16 +35,22 @@ import net.minecraft.world.level.Level;
  * and answered - by default with a stasis pull, which moves you somewhere else entirely
  * rather than merely logging you out of the fight.
  *
- * <p>A teleport you requested yourself through {@link StasisPull} is trusted automatically,
- * so pulling home does not trip your own alarm, and neither does the escape pull this module
- * fires.
+ * <p>A teleport you requested yourself is also trusted automatically: through {@link
+ * StasisPull} (so pulling home, and the escape pull this module itself fires, do not trip the
+ * alarm), and through your own thrown ender pearl - which looks identical to a stasis pull on
+ * the wire (a large, sudden jump) and would otherwise be flagged every time.
  *
  * <h2>Why it watches for a moment instead of deciding instantly</h2>
  * The server sends your new position before it sends the entities around it. Checking who is
- * nearby on the very tick you land would often see an empty world. So a teleport opens a
- * short window, and the module reacts the moment a stranger shows up inside it.
+ * nearby on the very tick you land would often see an empty world. So a teleport opens a short
+ * window, and the module reacts the moment either a stranger shows up inside it or a totem
+ * pops - a pop is trusted on its own, since whoever hit you hard enough to need it may not be
+ * standing within {@code danger-range}.
  */
 public class StasisProtection extends Module {
+
+    /** Vanilla entity event id for "this entity popped a totem". */
+    private static final byte TOTEM_POP_EVENT = 35;
 
     public enum Reaction {
         /** Ask a stasis bot to pull you somewhere else. Keeps you in the game. */
@@ -84,6 +94,22 @@ public class StasisProtection extends Module {
         .visible(trustOwnPull::get)
         .build());
 
+    private final Setting<Boolean> trustOwnPearl = sgGeneral.add(new BoolSetting.Builder()
+        .name("trust-own-pearl")
+        .description("Treat a teleport as consented if you threw an ender pearl recently. " +
+                     "Without this, throwing your own pearl looks identical to being stasis " +
+                     "pulled and gets treated as an ambush.")
+        .defaultValue(true)
+        .build());
+
+    private final Setting<Double> ownPearlGrace = sgGeneral.add(new DoubleSetting.Builder()
+        .name("own-pearl-grace")
+        .description("How long after throwing a pearl a teleport is still trusted. A long " +
+                     "throw can take several seconds to land.")
+        .defaultValue(6.0).min(1.0).max(20.0).sliderMin(2.0).sliderMax(12.0)
+        .visible(trustOwnPearl::get)
+        .build());
+
     private final Setting<Double> teleportDistance = sgDetection.add(new DoubleSetting.Builder()
         .name("teleport-distance")
         .description("How far you must move in a single tick to count as teleported. Well " +
@@ -105,6 +131,15 @@ public class StasisProtection extends Module {
         .defaultValue(2.5).min(0.5).max(15.0).sliderMin(1.0).sliderMax(8.0)
         .build());
 
+    private final Setting<Boolean> totemTrigger = sgDetection.add(new BoolSetting.Builder()
+        .name("totem-trigger")
+        .description("Also treat a totem pop during the watch window as a confirmed ambush by " +
+                     "itself - one pop is enough, whether or not a stranger was seen nearby. " +
+                     "Whoever hit you hard enough to pop it may be shooting from outside " +
+                     "danger-range.")
+        .defaultValue(true)
+        .build());
+
     /** Where we were last tick, and in which world, so a teleport can be told from walking. */
     private double lastX, lastY, lastZ;
     private Level lastLevel;
@@ -114,6 +149,8 @@ public class StasisProtection extends Module {
     /** Tick the current watch window ends on, or -1 when not watching. */
     private int watchUntil = -1;
     private boolean consented;
+    /** Tick until which a teleport is trusted as our own pearl landing, or -1 when none is due. */
+    private int pearlGraceUntil = -1;
 
     public StasisProtection() {
         super(NewAddon.CATEGORY, "stasis-protection",
@@ -125,6 +162,7 @@ public class StasisProtection extends Module {
         ticks = 0;
         watchUntil = -1;
         consented = false;
+        pearlGraceUntil = -1;
         seeded = false;
         lastLevel = null;
 
@@ -134,6 +172,30 @@ public class StasisProtection extends Module {
         if (!consentKey.get().isSet()) {
             warning("No consent key bound - every teleport will be judged on who is nearby.");
         }
+    }
+
+    @EventHandler
+    private void onPacketSend(PacketEvent.Send event) {
+        // We are the only source of this packet, so there is no ambiguity to resolve: if we
+        // just right-clicked with a pearl in hand, whatever teleport follows is ours.
+        if (!trustOwnPearl.get() || mc.player == null) return;
+        if (!(event.packet instanceof ServerboundUseItemPacket p)) return;
+        if (!mc.player.getItemInHand(p.getHand()).is(Items.ENDER_PEARL)) return;
+
+        pearlGraceUntil = ticks + (int) Math.round(ownPearlGrace.get() * 20.0);
+    }
+
+    @EventHandler
+    private void onPacketReceive(PacketEvent.Receive event) {
+        // Only worth looking at while a teleport has already opened a watch window - a totem
+        // popping with no unexplained teleport in flight is none of this module's business.
+        if (!totemTrigger.get() || watchUntil == -1 || mc.player == null || mc.level == null) return;
+        if (!(event.packet instanceof ClientboundEntityEventPacket p)) return;
+        if (p.getEventId() != TOTEM_POP_EVENT) return;
+        if (p.getEntity(mc.level) != mc.player) return;
+
+        watchUntil = -1;
+        react("popped a totem");
     }
 
     @EventHandler
@@ -173,7 +235,8 @@ public class StasisProtection extends Module {
             Player threat = findThreat();
             if (threat != null) {
                 watchUntil = -1;
-                react(threat);
+                react(threat.getName().getString() + " is "
+                    + String.format("%.1f", mc.player.distanceTo(threat)) + " blocks away");
             }
         }
     }
@@ -191,9 +254,20 @@ public class StasisProtection extends Module {
         if (notify.get()) warning("Unrequested teleport, %.0f blocks. Checking who is here.", distance);
     }
 
-    /** True when this teleport is one we asked for, by key or by our own pull request. */
+    /**
+     * True when this teleport is one we asked for: by key, by our own pull request, or by a
+     * pearl we threw ourselves.
+     */
     private boolean isConsented() {
         if (consentKey.get().isSet() && consentKey.get().isPressed()) return true;
+
+        if (trustOwnPearl.get() && pearlGraceUntil != -1 && ticks <= pearlGraceUntil) {
+            // Consumed rather than left to expire naturally: the grace period is "waiting for
+            // this specific pearl to land". Once a teleport has satisfied it, a second
+            // teleport minutes apart has nothing to do with that same throw.
+            pearlGraceUntil = -1;
+            return true;
+        }
 
         if (trustOwnPull.get()) {
             long last = Modules.get().get(StasisPull.class).lastPullMillis();
@@ -224,22 +298,21 @@ public class StasisProtection extends Module {
         return closest;
     }
 
-    private void react(Player threat) {
-        String name = threat.getName().getString();
-        warning("Ambush: %s is %.1f blocks away.", name, mc.player.distanceTo(threat));
+    private void react(String reason) {
+        warning("Ambush: %s.", reason);
 
         if (reaction.get() == Reaction.Pull) {
             // StasisPull records the request, so the teleport it causes is trusted and
             // does not trip this module all over again.
             Modules.get().get(StasisPull.class).pull();
         } else {
-            disconnect(name);
+            disconnect(reason);
         }
     }
 
-    private void disconnect(String name) {
+    private void disconnect(String reason) {
         if (mc.player == null || mc.player.connection == null) return;
         mc.player.connection.getConnection()
-            .disconnect(Component.literal("[StasisProtection] pulled into " + name));
+            .disconnect(Component.literal("[StasisProtection] " + reason));
     }
 }
