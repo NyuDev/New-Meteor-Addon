@@ -156,11 +156,14 @@ Silk Touch → pick it up.
 
 | Setting | Default | |
 | --- | --- | --- |
-| `min-fireworks` / `target-fireworks` | 8 / 64 | Resupply below the first, carry away the second. |
+| `min-fireworks` / `target-fireworks` | 8 / 192 | Resupply below the first, carry away the second. |
 | `min-elytra-durability` | 80 | Mend once remaining durability drops below this. |
-| `xp-bottles` | 64 | Bottles to take out per mending session. |
+| `xp-bottles` | 128 | Bottles to take out per mending session; leftovers go back. |
 | `require-silk-touch` | on | Refuse to place the chest without one, or it breaks to obsidian. |
-| `void-clearance` | 3 | Solid blocks required under the spot before placing anything. |
+| `void-clearance` | 2 | Solid blocks required under the spot before placing anything. |
+| `search-radius` | 4 | How far around you to look for somewhere to set up. |
+| `fireworks-to-hotbar` | on | Put fireworks on the bar, where Baritone can actually use them. |
+| `pause-on-killaura` | on | Freeze mid-run while fighting, resume from the same phase. |
 | `action-delay` | 4 | Ticks between actions. Instant clicks look nothing like a player. |
 | `container-settle` | 10 | Ticks to wait after a container opens before reading it. |
 | `auto-takeoff` | on | Jump and open the elytra after resupplying. |

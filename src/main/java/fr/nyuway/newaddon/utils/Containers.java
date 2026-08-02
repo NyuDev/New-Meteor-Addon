@@ -104,6 +104,20 @@ public final class Containers {
         return -1;
     }
 
+    /**
+     * First empty hotbar slot in this menu, or -1.
+     *
+     * <p>The hotbar is the last nine slots of a container menu, after the three storage rows -
+     * so the plain "first empty player slot" search fills storage first and leaves the bar
+     * empty, which is useless for anything that has to be held.
+     */
+    public static int findEmptyInHotbarPart(AbstractContainerMenu menu) {
+        for (int i = menu.slots.size() - 9; i < menu.slots.size(); i++) {
+            if (i >= 0 && menu.slots.get(i).getItem().isEmpty()) return i;
+        }
+        return -1;
+    }
+
     /** First empty player-inventory slot in this menu, or -1. */
     public static int findEmptyInPlayerPart(AbstractContainerMenu menu) {
         for (int i = containerSize(menu); i < menu.slots.size(); i++) {

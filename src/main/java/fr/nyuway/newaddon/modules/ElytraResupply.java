@@ -5,10 +5,13 @@ import fr.nyuway.newaddon.compat.BaritoneBridge;
 import fr.nyuway.newaddon.utils.Containers;
 import meteordevelopment.meteorclient.events.world.TickEvent;
 import meteordevelopment.meteorclient.settings.BoolSetting;
+import meteordevelopment.meteorclient.settings.DoubleSetting;
 import meteordevelopment.meteorclient.settings.IntSetting;
 import meteordevelopment.meteorclient.settings.Setting;
 import meteordevelopment.meteorclient.settings.SettingGroup;
 import meteordevelopment.meteorclient.systems.modules.Module;
+import meteordevelopment.meteorclient.systems.modules.Modules;
+import meteordevelopment.meteorclient.systems.modules.combat.KillAura;
 import meteordevelopment.meteorclient.utils.Utils;
 import meteordevelopment.meteorclient.utils.player.FindItemResult;
 import meteordevelopment.meteorclient.utils.player.InvUtils;
@@ -17,6 +20,7 @@ import meteordevelopment.meteorclient.utils.world.BlockUtils;
 import meteordevelopment.orbit.EventHandler;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
+import net.minecraft.util.Mth;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.inventory.AbstractContainerMenu;
 import net.minecraft.world.item.Item;
@@ -75,8 +79,9 @@ public class ElytraResupply extends Module {
 
     private final Setting<Integer> targetFireworks = sgTriggers.add(new IntSetting.Builder()
         .name("target-fireworks")
-        .description("How many fireworks to carry away from a resupply.")
-        .defaultValue(64).min(1).max(256).sliderMin(16).sliderMax(128)
+        .description("How many fireworks to carry away. Several stacks: one is barely a leg " +
+                     "of a long crossing, and the whole point is not to land again shortly.")
+        .defaultValue(192).min(1).max(576).sliderMin(64).sliderMax(384)
         .build());
 
     private final Setting<Integer> minElytraDurability = sgTriggers.add(new IntSetting.Builder()
@@ -87,8 +92,9 @@ public class ElytraResupply extends Module {
 
     private final Setting<Integer> xpBottles = sgTriggers.add(new IntSetting.Builder()
         .name("xp-bottles")
-        .description("How many XP bottles to take out for a mending session.")
-        .defaultValue(64).min(1).max(256).sliderMin(16).sliderMax(128)
+        .description("How many XP bottles to take out for a mending session. Leftovers go " +
+                     "back in the shulker, so taking plenty costs nothing.")
+        .defaultValue(128).min(1).max(576).sliderMin(64).sliderMax(384)
         .build());
 
     private final Setting<Integer> actionDelay = sgGeneral.add(new IntSetting.Builder()
@@ -125,7 +131,28 @@ public class ElytraResupply extends Module {
         .name("void-clearance")
         .description("Solid blocks that must sit under the spot before anything is placed, so " +
                      "nothing you drop falls into the void or lava.")
-        .defaultValue(3).min(1).max(16).sliderMin(1).sliderMax(8)
+        .defaultValue(2).min(1).max(16).sliderMin(1).sliderMax(8)
+        .build());
+
+    private final Setting<Double> searchRadius = sgGeneral.add(new DoubleSetting.Builder()
+        .name("search-radius")
+        .description("How far around you to look for somewhere to set up. Must stay within " +
+                     "reach, since the blocks have to be clicked.")
+        .defaultValue(4.0).min(1.5).max(5.0).sliderMin(2.0).sliderMax(5.0)
+        .build());
+
+    private final Setting<Boolean> hotbarFirst = sgGeneral.add(new BoolSetting.Builder()
+        .name("fireworks-to-hotbar")
+        .description("Put fireworks in the hotbar before the main inventory. Baritone can only " +
+                     "fly with what it can reach, so a stack buried in storage is no use.")
+        .defaultValue(true)
+        .build());
+
+    private final Setting<Boolean> pauseOnKillAura = sgGeneral.add(new BoolSetting.Builder()
+        .name("pause-on-killaura")
+        .description("Freeze wherever it is while KillAura is fighting, and pick up from the " +
+                     "same phase afterwards.")
+        .defaultValue(true)
         .build());
 
     private final Setting<Boolean> debug = sgGeneral.add(new BoolSetting.Builder()
@@ -136,6 +163,9 @@ public class ElytraResupply extends Module {
 
     private Phase phase = Phase.IDLE;
     private int phaseTicks;
+
+    /** Reused by the spot search so scanning allocates nothing. */
+    private final BlockPos.MutableBlockPos scratch = new BlockPos.MutableBlockPos();
 
     private BlockPos chestPos;
     private BlockPos shulkerPos;
@@ -186,6 +216,13 @@ public class ElytraResupply extends Module {
     @EventHandler
     private void onTick(TickEvent.Pre event) {
         if (mc.player == null || mc.level == null || !BaritoneBridge.isUsable()) return;
+
+        // Freeze rather than reset: phaseTicks is not advanced either, so a long fight does
+        // not trip the phase timeout and throw away a run that was going fine.
+        if (pauseOnKillAura.get() && Modules.get().isActive(KillAura.class)) {
+            if (isContainerOpen()) mc.player.closeContainer();
+            return;
+        }
 
         if (phase == Phase.IDLE) {
             watchForLanding();
@@ -375,19 +412,29 @@ public class ElytraResupply extends Module {
         BlockUtils.place(shulkerPos, shulker, 50);
     }
 
+    /**
+     * Empties what we need out of the shulker, a stack per action tick.
+     *
+     * <p>Mending comes before restocking on purpose: bottles are what the next phase spends,
+     * and if the shulker turns out short of fireworks we would rather have already repaired
+     * than be holding neither.
+     */
     private void takeSupplies() {
         if (!isContainerOpen()) {
             to(Phase.OPEN_SHULKER);
             return;
         }
 
+        if (phaseTicks < containerSettle.get()) return;
+        if (!ready()) return;
+
         AbstractContainerMenu menu = mc.player.containerMenu;
 
         if (needMending && countInventory(Items.EXPERIENCE_BOTTLE) < xpBottles.get()) {
-            if (pullOne(menu, Items.EXPERIENCE_BOTTLE)) return;
+            if (pullOne(menu, Items.EXPERIENCE_BOTTLE, false)) return;
         }
         if (needFireworks && countInventory(Items.FIREWORK_ROCKET) < targetFireworks.get()) {
-            if (pullOne(menu, Items.FIREWORK_ROCKET)) return;
+            if (pullOne(menu, Items.FIREWORK_ROCKET, hotbarFirst.get())) return;
         }
 
         mc.player.closeContainer();
@@ -567,15 +614,22 @@ public class ElytraResupply extends Module {
             && Containers.containerSize(mc.player.containerMenu) > 0;
     }
 
-    /** Moves one stack of an item from the container into us. Returns true if it acted. */
-    private boolean pullOne(AbstractContainerMenu menu, Item item) {
+    /**
+     * Moves one stack of an item from the container into us.
+     *
+     * @param preferHotbar put it on the bar if there is room there, for things that have to
+     *                     be reachable in play rather than merely carried
+     * @return true if it acted
+     */
+    private boolean pullOne(AbstractContainerMenu menu, Item item, boolean preferHotbar) {
         int from = Containers.findInContainer(menu, item);
         if (from == -1) return false;
 
-        int to = Containers.findEmptyInPlayerPart(menu);
-        if (to == -1) return false;
+        int dest = preferHotbar ? Containers.findEmptyInHotbarPart(menu) : -1;
+        if (dest == -1) dest = Containers.findEmptyInPlayerPart(menu);
+        if (dest == -1) return false;
 
-        Containers.moveStack(menu, from, to);
+        Containers.moveStack(menu, from, dest);
         return true;
     }
 
@@ -694,31 +748,54 @@ public class ElytraResupply extends Module {
     }
 
     /**
-     * A spot beside us to put a block: air, with air above it, standing on solid ground that
-     * goes down at least {@code void-clearance} blocks. That last check is what stops a
-     * shulker full of supplies being dropped off a ledge.
+     * A spot to put a block: air, with air above it, over ground that stays solid for
+     * {@code void-clearance} blocks. That last check is what stops a shulker full of supplies
+     * being dropped off a ledge.
+     *
+     * <p>Searches the whole reachable area nearest-first rather than only the four blocks
+     * touching us. Checking just those meant the chest took one of them and the shulker then
+     * had nowhere to go, which is exactly how a run stalled after placing the chest.
      */
     private BlockPos findSpot() {
         BlockPos feet = mc.player.blockPosition();
+        BlockPos best = null;
+        double bestDist = Double.MAX_VALUE;
 
-        for (Direction dir : Direction.Plane.HORIZONTAL) {
-            BlockPos candidate = feet.relative(dir);
-            if (candidate.equals(chestPos) || candidate.equals(shulkerPos)) continue;
+        int radius = Mth.ceil(searchRadius.get());
+        for (int dx = -radius; dx <= radius; dx++) {
+            for (int dy = -2; dy <= 1; dy++) {
+                for (int dz = -radius; dz <= radius; dz++) {
+                    scratch.set(feet.getX() + dx, feet.getY() + dy, feet.getZ() + dz);
+                    if (!isUsableSpot(scratch)) continue;
 
-            if (!mc.level.getBlockState(candidate).isAir()) continue;
-            if (!mc.level.getBlockState(candidate.above()).isAir()) continue;
+                    // Must be close enough to actually click, not just close enough to see.
+                    double dist = mc.player.getEyePosition()
+                        .distanceToSqr(scratch.getX() + 0.5, scratch.getY() + 0.5, scratch.getZ() + 0.5);
+                    if (dist > searchRadius.get() * searchRadius.get()) continue;
 
-            boolean solid = true;
-            for (int d = 1; d <= voidClearance.get(); d++) {
-                if (mc.level.getBlockState(candidate.below(d)).isAir()) {
-                    solid = false;
-                    break;
+                    if (dist < bestDist) {
+                        bestDist = dist;
+                        best = scratch.immutable();
+                    }
                 }
             }
-            if (solid) return candidate;
         }
 
-        return null;
+        return best;
+    }
+
+    private boolean isUsableSpot(BlockPos pos) {
+        if (pos.equals(chestPos) || pos.equals(shulkerPos)) return false;
+        if (pos.equals(mc.player.blockPosition())) return false;
+
+        if (!mc.level.getBlockState(pos).isAir()) return false;
+        // Headroom, so a shulker can actually be opened where it stands.
+        if (!mc.level.getBlockState(pos.above()).isAir()) return false;
+
+        for (int d = 1; d <= voidClearance.get(); d++) {
+            if (mc.level.getBlockState(pos.below(d)).isAir()) return false;
+        }
+        return true;
     }
 
     private void log(String fmt, Object... args) {
