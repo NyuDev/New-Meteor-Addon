@@ -142,6 +142,35 @@ Teleport detection compares your position tick to tick rather than reading the p
 packet, whose API was reworked in 1.21.2. A world change (portal, respawn, reconnect) resets
 the tracking instead of counting as a teleport.
 
+## ElytraResupply
+
+Baritone's elytra process lands when it runs out of fireworks or the elytra wears out — on a
+long crossing that means coming back to a stranded character. This notices the landing, sets
+up on the spot, tops back up, clears every trace, and sends Baritone on to the same
+destination.
+
+The round: place an ender chest → take out a shulker → place it → take XP bottles and
+fireworks → throw the bottles at your feet to mend the elytra → put leftovers back in the
+same shulker → break it → return it to the slot it came from → break the ender chest with
+Silk Touch → pick it up.
+
+| Setting | Default | |
+| --- | --- | --- |
+| `min-fireworks` / `target-fireworks` | 8 / 64 | Resupply below the first, carry away the second. |
+| `min-elytra-durability` | 80 | Mend once remaining durability drops below this. |
+| `xp-bottles` | 64 | Bottles to take out per mending session. |
+| `require-silk-touch` | on | Refuse to place the chest without one, or it breaks to obsidian. |
+| `void-clearance` | 3 | Solid blocks required under the spot before placing anything. |
+| `debug` | **on** | Logs every phase transition. Leave it on until you trust it. |
+
+**Requires Meteor's Baritone fork**, and the elytra must carry **Mending** — XP bottles only
+repair through that enchantment.
+
+Every step is a server round trip (a block must appear, a container must open, an item must
+be collected), so this is a state machine with a timeout per phase. On any timeout it runs
+its cleanup path rather than stopping where it is, so a failure does not leave your ender
+chest sitting in the open.
+
 ## Supported versions
 
 | Minecraft | Meteor | Java |

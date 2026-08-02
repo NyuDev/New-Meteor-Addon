@@ -43,6 +43,10 @@ public final class BaritoneBridge {
     private static Method mGetPathingBehavior;
     private static Method mCancelEverything;
     private static Method mIsPathing;
+    private static Method mGetElytraProcess;
+    private static Method mElytraIsActive;
+    private static Method mElytraDestination;
+    private static Method mElytraPathTo;
     private static Constructor<?> cGoalNear;
     private static Constructor<?> cGoalXZ;
 
@@ -121,6 +125,49 @@ public final class BaritoneBridge {
         }
     }
 
+    /** True while Baritone's elytra process is flying us somewhere. */
+    public static boolean isElytraActive() {
+        if (!isUsable()) return false;
+
+        try {
+            Object baritone = mGetPrimaryBaritone.invoke(provider);
+            Object elytra = mGetElytraProcess.invoke(baritone);
+            return Boolean.TRUE.equals(mElytraIsActive.invoke(elytra));
+        } catch (Throwable t) {
+            fail("isElytraActive failed", t);
+            return false;
+        }
+    }
+
+    /** Where the elytra process is currently headed, or null. */
+    public static BlockPos elytraDestination() {
+        if (!isUsable()) return null;
+
+        try {
+            Object baritone = mGetPrimaryBaritone.invoke(provider);
+            Object elytra = mGetElytraProcess.invoke(baritone);
+            return (BlockPos) mElytraDestination.invoke(elytra);
+        } catch (Throwable t) {
+            fail("elytraDestination failed", t);
+            return null;
+        }
+    }
+
+    /** Sends the elytra process back to a destination, resuming an interrupted flight. */
+    public static boolean elytraPathTo(BlockPos pos) {
+        if (!isUsable()) return false;
+
+        try {
+            Object baritone = mGetPrimaryBaritone.invoke(provider);
+            Object elytra = mGetElytraProcess.invoke(baritone);
+            mElytraPathTo.invoke(elytra, pos);
+            return true;
+        } catch (Throwable t) {
+            fail("elytraPathTo failed", t);
+            return false;
+        }
+    }
+
     /** Stops whatever Baritone is currently doing. */
     public static void cancel() {
         if (!isUsable()) return;
@@ -162,6 +209,8 @@ public final class BaritoneBridge {
             Class<?> goalXZClass = Class.forName("baritone.api.pathing.goals.GoalXZ");
             Class<?> customGoalClass = Class.forName("baritone.api.process.ICustomGoalProcess");
             Class<?> pathingClass = Class.forName("baritone.api.behavior.IPathingBehavior");
+            Class<?> elytraClass = Class.forName("baritone.api.process.IElytraProcess");
+            Class<?> processClass = Class.forName("baritone.api.process.IBaritoneProcess");
 
             provider = api.getMethod("getProvider").invoke(null);
             if (provider == null) {
@@ -179,6 +228,10 @@ public final class BaritoneBridge {
             mGetPathingBehavior = baritoneClass.getMethod("getPathingBehavior");
             mCancelEverything = pathingClass.getMethod("cancelEverything");
             mIsPathing = pathingClass.getMethod("isPathing");
+            mGetElytraProcess = baritoneClass.getMethod("getElytraProcess");
+            mElytraIsActive = processClass.getMethod("isActive");
+            mElytraDestination = elytraClass.getMethod("currentDestination");
+            mElytraPathTo = elytraClass.getMethod("pathTo", BlockPos.class);
             cGoalNear = goalNearClass.getConstructor(BlockPos.class, int.class);
             cGoalXZ = goalXZClass.getConstructor(int.class, int.class);
 
