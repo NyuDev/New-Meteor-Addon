@@ -5,6 +5,7 @@ import meteordevelopment.meteorclient.events.packets.PacketEvent;
 import meteordevelopment.meteorclient.events.world.TickEvent;
 import meteordevelopment.meteorclient.settings.BoolSetting;
 import meteordevelopment.meteorclient.settings.DoubleSetting;
+import meteordevelopment.meteorclient.settings.EnumSetting;
 import meteordevelopment.meteorclient.settings.IntSetting;
 import meteordevelopment.meteorclient.settings.Setting;
 import meteordevelopment.meteorclient.settings.SettingGroup;
@@ -14,6 +15,11 @@ import meteordevelopment.meteorclient.systems.modules.Modules;
 import meteordevelopment.orbit.EventHandler;
 import net.minecraft.network.protocol.game.ClientboundEntityEventPacket;
 import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
+
+import java.util.ArrayDeque;
+import java.util.Deque;
 
 /**
  * AutoStasisPull - pulls you to safety when things go wrong, instead of logging out.
@@ -34,6 +40,22 @@ public class AutoStasisPull extends Module {
 
     /** Vanilla entity event id for "this entity popped a totem". */
     private static final byte TOTEM_POP_EVENT = 35;
+
+    /**
+     * Ticks to wait after a pop before trusting the inventory count. The server decrements
+     * the totem stack and syncs the new slot contents at the end of the same tick the pop
+     * happens on; that sync packet is not guaranteed to have been processed yet by the time
+     * our handler for the entity-status packet runs, so reading the inventory immediately
+     * can still see the pre-pop count.
+     */
+    private static final int RECOUNT_DELAY_TICKS = 2;
+
+    public enum TotemMode {
+        /** Fire when a pop leaves you with few totems left - the useful low-supply warning. */
+        Remaining,
+        /** Fire on a burst of pops close together in time, regardless of supply. */
+        PopsInWindow
+    }
 
     private final SettingGroup sgGeneral = settings.getDefaultGroup();
     private final SettingGroup sgTriggers = settings.createGroup("Triggers");
@@ -73,10 +95,40 @@ public class AutoStasisPull extends Module {
         .visible(healthTrigger::get)
         .build());
 
-    private final Setting<Integer> totemPops = sgTriggers.add(new IntSetting.Builder()
-        .name("totem-pops")
-        .description("Pull after this many totems pop. 0 disables the trigger.")
-        .defaultValue(1).min(0).max(10).sliderMin(0).sliderMax(5)
+    private final Setting<Boolean> totemTrigger = sgTriggers.add(new BoolSetting.Builder()
+        .name("totem")
+        .description("Pull when you pop a totem, gated by one of the modes below.")
+        .defaultValue(true)
+        .build());
+
+    private final Setting<TotemMode> totemMode = sgTriggers.add(new EnumSetting.Builder<TotemMode>()
+        .name("totem-mode")
+        .description("Remaining checks how many totems you have left after the pop. " +
+                     "PopsInWindow instead counts pops within a time window, ignoring supply.")
+        .defaultValue(TotemMode.Remaining)
+        .visible(totemTrigger::get)
+        .build());
+
+    private final Setting<Integer> totemRemaining = sgTriggers.add(new IntSetting.Builder()
+        .name("totem-remaining")
+        .description("Pull when a pop leaves you with this many totems or fewer, anywhere in " +
+                     "your inventory.")
+        .defaultValue(3).min(0).max(64).sliderMin(0).sliderMax(10)
+        .visible(() -> totemTrigger.get() && totemMode.get() == TotemMode.Remaining)
+        .build());
+
+    private final Setting<Integer> totemWindowPops = sgTriggers.add(new IntSetting.Builder()
+        .name("totem-window-pops")
+        .description("Pops within the time window needed to pull.")
+        .defaultValue(3).min(2).max(10).sliderMin(2).sliderMax(6)
+        .visible(() -> totemTrigger.get() && totemMode.get() == TotemMode.PopsInWindow)
+        .build());
+
+    private final Setting<Integer> totemWindowSeconds = sgTriggers.add(new IntSetting.Builder()
+        .name("totem-window-seconds")
+        .description("Time window the pops above must fall within.")
+        .defaultValue(300).min(5).max(1800).sliderMin(30).sliderMax(600)
+        .visible(() -> totemTrigger.get() && totemMode.get() == TotemMode.PopsInWindow)
         .build());
 
     private final Setting<Boolean> playersTrigger = sgTriggers.add(new BoolSetting.Builder()
@@ -92,7 +144,12 @@ public class AutoStasisPull extends Module {
         .visible(playersTrigger::get)
         .build());
 
-    private int pops;
+    /** Recent pop timestamps (ms), oldest first. Only used by {@link TotemMode#PopsInWindow}. */
+    private final Deque<Long> popTimes = new ArrayDeque<>();
+
+    private int ticks;
+    /** Tick to recount the inventory on, or -1 when no recount is pending. */
+    private int recountAtTick = -1;
 
     public AutoStasisPull() {
         super(NewAddon.CATEGORY, "auto-stasis-pull",
@@ -101,7 +158,9 @@ public class AutoStasisPull extends Module {
 
     @Override
     public void onActivate() {
-        pops = 0;
+        ticks = 0;
+        recountAtTick = -1;
+        popTimes.clear();
 
         // Looked up by name, not by class: AutoLog has moved package between Meteor
         // versions, and this addon has to compile against all twelve of them.
@@ -120,18 +179,40 @@ public class AutoStasisPull extends Module {
 
     @EventHandler
     private void onPacket(PacketEvent.Receive event) {
-        if (totemPops.get() == 0 || mc.player == null || mc.level == null) return;
+        if (!totemTrigger.get() || mc.player == null || mc.level == null) return;
         if (!(event.packet instanceof ClientboundEntityEventPacket p)) return;
         if (p.getEventId() != TOTEM_POP_EVENT) return;
         if (p.getEntity(mc.level) != mc.player) return;
 
-        pops++;
-        if (pops >= totemPops.get()) fire("popped " + pops + " totem" + (pops == 1 ? "" : "s"));
+        if (totemMode.get() == TotemMode.Remaining) {
+            // The slot-update packet for the consumed totem may not have landed yet -
+            // recount a couple of ticks from now instead of trusting the count right away.
+            recountAtTick = ticks + RECOUNT_DELAY_TICKS;
+        } else {
+            popTimes.addLast(System.currentTimeMillis());
+            long windowStart = System.currentTimeMillis() - totemWindowSeconds.get() * 1000L;
+            while (!popTimes.isEmpty() && popTimes.peekFirst() < windowStart) popTimes.pollFirst();
+
+            if (popTimes.size() >= totemWindowPops.get()) {
+                fire(popTimes.size() + " totems popped within " + totemWindowSeconds.get() + "s");
+                popTimes.clear();
+            }
+        }
     }
 
     @EventHandler
     private void onTick(TickEvent.Pre event) {
         if (mc.player == null || mc.level == null) return;
+        ticks++;
+
+        if (recountAtTick != -1 && ticks >= recountAtTick) {
+            recountAtTick = -1;
+            int left = countTotems();
+            if (left <= totemRemaining.get()) {
+                fire("popped a totem, " + left + " left");
+                return;
+            }
+        }
 
         if (healthTrigger.get()) {
             float health = mc.player.getHealth();
@@ -152,6 +233,17 @@ public class AutoStasisPull extends Module {
                 }
             }
         }
+    }
+
+    /** Totems anywhere on the player: hotbar, main inventory, armor and offhand slots. */
+    private int countTotems() {
+        var inv = mc.player.getInventory();
+        int total = 0;
+        for (int i = 0; i < inv.getContainerSize(); i++) {
+            ItemStack stack = inv.getItem(i);
+            if (stack.is(Items.TOTEM_OF_UNDYING)) total += stack.getCount();
+        }
+        return total;
     }
 
     private void fire(String reason) {

@@ -85,8 +85,15 @@ is delegated to StasisPull, so whichever transport you set there is what gets us
 | `toggle-off` | on | Turn off after a pull instead of firing repeatedly. |
 | `health` / `health-level` | on / 8 | Pull at or below this health. |
 | `count-absorption` | on | Count golden-apple absorption as health. |
-| `totem-pops` | 1 | Pull after this many totems pop. 0 disables. |
+| `totem` / `totem-mode` | on / Remaining | `Remaining` checks supply after a pop; `PopsInWindow` counts pops in a time window. |
+| `totem-remaining` | 3 | (`Remaining`) Pull when a pop leaves you with this many totems or fewer. |
+| `totem-window-pops` / `totem-window-seconds` | 3 / 300 | (`PopsInWindow`) This many pops within this many seconds. |
 | `players` / `player-range` | off / 16 | Pull when a non-friend gets this close. |
+
+Both totem modes require an actual pop (vanilla `ENTITY_EVENT` id 35), never a bare inventory
+scan. `Remaining` recounts your totems (hotbar, storage, armor, offhand) a couple of ticks
+after the pop, since the server's slot-update packet is not guaranteed to have landed by the
+time the pop event itself is processed.
 
 Separate module rather than a patch into AutoLog's panel: hooking Meteor's own module would
 have to survive twelve Meteor versions, and `AutoLog` has already moved package between them.
