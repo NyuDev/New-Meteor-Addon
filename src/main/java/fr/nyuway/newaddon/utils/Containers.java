@@ -2,8 +2,12 @@ package fr.nyuway.newaddon.utils;
 
 import meteordevelopment.meteorclient.utils.player.InvUtils;
 import net.minecraft.world.inventory.AbstractContainerMenu;
+import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.level.block.ShulkerBoxBlock;
+
+import java.util.function.Predicate;
 
 /**
  * Slot-level helpers for an open container.
@@ -29,13 +33,41 @@ public final class Containers {
         return Math.max(0, menu.slots.size() - 36);
     }
 
+    /**
+     * Any shulker box, dyed or not.
+     *
+     * <p>Each colour is a separate item, so {@code is(Items.SHULKER_BOX)} only ever matches
+     * the undyed one - which is how a full ender chest reads as empty. {@code ItemTags
+     * .SHULKER_BOXES} would be the obvious fix but does not exist before 1.21, so this goes
+     * through the block type instead, which is the same on every supported version.
+     */
+    public static boolean isShulker(ItemStack stack) {
+        return stack.getItem() instanceof BlockItem item
+            && item.getBlock() instanceof ShulkerBoxBlock;
+    }
+
     /** First container slot holding this item, or -1. */
     public static int findInContainer(AbstractContainerMenu menu, Item item) {
+        return findInContainer(menu, stack -> stack.is(item));
+    }
+
+    /** First container slot whose stack matches, or -1. */
+    public static int findInContainer(AbstractContainerMenu menu, Predicate<ItemStack> match) {
         int size = containerSize(menu);
         for (int i = 0; i < size; i++) {
-            if (menu.slots.get(i).getItem().is(item)) return i;
+            ItemStack stack = menu.slots.get(i).getItem();
+            if (!stack.isEmpty() && match.test(stack)) return i;
         }
         return -1;
+    }
+
+    /** True when the container has nothing in it at all. */
+    public static boolean isContainerEmpty(AbstractContainerMenu menu) {
+        int size = containerSize(menu);
+        for (int i = 0; i < size; i++) {
+            if (!menu.slots.get(i).getItem().isEmpty()) return false;
+        }
+        return true;
     }
 
     /** First empty container slot, or -1. */
@@ -60,8 +92,14 @@ public final class Containers {
 
     /** First player-inventory slot in this menu holding the item, or -1. */
     public static int findInPlayerPart(AbstractContainerMenu menu, Item item) {
+        return findInPlayerPart(menu, stack -> stack.is(item));
+    }
+
+    /** First player-inventory slot in this menu whose stack matches, or -1. */
+    public static int findInPlayerPart(AbstractContainerMenu menu, Predicate<ItemStack> match) {
         for (int i = containerSize(menu); i < menu.slots.size(); i++) {
-            if (menu.slots.get(i).getItem().is(item)) return i;
+            ItemStack stack = menu.slots.get(i).getItem();
+            if (!stack.isEmpty() && match.test(stack)) return i;
         }
         return -1;
     }

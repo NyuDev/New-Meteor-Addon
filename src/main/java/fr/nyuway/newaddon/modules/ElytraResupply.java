@@ -27,6 +27,8 @@ import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.Vec3;
 
+import java.util.function.Predicate;
+
 /**
  * ElytraResupply - keeps a Baritone elytra flight going without you babysitting it.
  *
@@ -56,7 +58,7 @@ public class ElytraResupply extends Module {
         PLACE_CHEST, OPEN_CHEST, TAKE_SHULKER, PLACE_SHULKER, OPEN_SHULKER, TAKE_SUPPLIES,
         REPAIR,
         RETURN_SUPPLIES, BREAK_SHULKER, RETURN_SHULKER, BREAK_CHEST,
-        RESUME
+        TAKEOFF, RESUME
     }
 
     /** Ticks any single phase may take before the run is treated as failed. */
@@ -89,6 +91,29 @@ public class ElytraResupply extends Module {
         .defaultValue(64).min(1).max(256).sliderMin(16).sliderMax(128)
         .build());
 
+    private final Setting<Integer> actionDelay = sgGeneral.add(new IntSetting.Builder()
+        .name("action-delay")
+        .description("Ticks between two actions. Firing container clicks and placements as " +
+                     "fast as the client allows looks nothing like a player and gives the " +
+                     "server no time to answer.")
+        .defaultValue(4).min(0).max(40).sliderMin(0).sliderMax(20)
+        .build());
+
+    private final Setting<Integer> containerSettle = sgGeneral.add(new IntSetting.Builder()
+        .name("container-settle")
+        .description("Ticks to wait after a container opens before reading it. Contents arrive " +
+                     "in a packet after the menu itself, so reading straight away sees an " +
+                     "empty chest.")
+        .defaultValue(10).min(0).max(60).sliderMin(2).sliderMax(30)
+        .build());
+
+    private final Setting<Boolean> autoTakeoff = sgGeneral.add(new BoolSetting.Builder()
+        .name("auto-takeoff")
+        .description("Jump and open the elytra after resupplying. Baritone is handed the " +
+                     "destination but will not get you off the ground by itself.")
+        .defaultValue(true)
+        .build());
+
     private final Setting<Boolean> requireSilkTouch = sgGeneral.add(new BoolSetting.Builder()
         .name("require-silk-touch")
         .description("Refuse to place the ender chest unless a Silk Touch pickaxe is on you. " +
@@ -116,6 +141,8 @@ public class ElytraResupply extends Module {
     private BlockPos shulkerPos;
     /** Container slot the shulker came from, so it goes back exactly where it was. */
     private int shulkerHomeSlot = -1;
+    /** Inventory slot the Silk Touch tool was pulled from, so it can be put back. */
+    private int pickaxeHomeSlot = -1;
     /** Destination Baritone was flying to, captured before it gave up. */
     private BlockPos resumeTarget;
     /** What this run is for; a run may need only one of the two. */
@@ -145,6 +172,7 @@ public class ElytraResupply extends Module {
         chestPos = null;
         shulkerPos = null;
         shulkerHomeSlot = -1;
+        pickaxeHomeSlot = -1;
         resumeTarget = null;
         needFireworks = needMending = false;
     }
@@ -179,12 +207,20 @@ public class ElytraResupply extends Module {
             case TAKE_SUPPLIES -> takeSupplies();
             case REPAIR -> repair();
             case RETURN_SUPPLIES -> returnSupplies();
-            case BREAK_SHULKER -> breakAndCollect(shulkerPos, Items.SHULKER_BOX, Phase.RETURN_SHULKER);
+            case BREAK_SHULKER -> breakAndCollect(shulkerPos, Containers::isShulker, false, Phase.RETURN_SHULKER);
             case RETURN_SHULKER -> returnShulker();
-            case BREAK_CHEST -> breakAndCollect(chestPos, Items.ENDER_CHEST, Phase.RESUME);
+            case BREAK_CHEST -> breakAndCollect(chestPos, s -> s.is(Items.ENDER_CHEST), true,
+                autoTakeoff.get() ? Phase.TAKEOFF : Phase.RESUME);
+            case TAKEOFF -> takeoff();
             case RESUME -> resume();
             default -> { }
         }
+    }
+
+    /** True on ticks where an action is allowed, so clicks are paced rather than instant. */
+    private boolean ready() {
+        int delay = actionDelay.get();
+        return delay <= 0 || phaseTicks % delay == 1;
     }
 
     // --- trigger ------------------------------------------------------------
@@ -277,31 +313,39 @@ public class ElytraResupply extends Module {
             return;
         }
 
+        // Contents arrive after the menu does; reading immediately sees an empty chest.
+        if (phaseTicks < containerSettle.get()) return;
+
         AbstractContainerMenu menu = mc.player.containerMenu;
 
         // Already holding one from a previous pass through this phase.
-        if (InvUtils.find(Items.SHULKER_BOX).found() && shulkerHomeSlot != -1) {
+        if (shulkerHomeSlot != -1 && Containers.findInPlayerPart(menu, Containers::isShulker) != -1) {
             mc.player.closeContainer();
             to(Phase.PLACE_SHULKER);
             return;
         }
 
-        int from = Containers.findInContainer(menu, Items.SHULKER_BOX);
+        int from = Containers.findInContainer(menu, Containers::isShulker);
         if (from == -1) {
-            error("No shulker box in the ender chest.");
+            // Keep waiting rather than giving up: a slow sync and a genuinely empty chest
+            // look the same on one tick. The phase timeout is what settles it.
+            if (Containers.isContainerEmpty(menu)) return;
+            error("Ender chest has items but no shulker box in it.");
             abort();
             return;
         }
 
-        int to = Containers.findEmptyInPlayerPart(menu);
-        if (to == -1) {
+        if (!ready()) return;
+
+        int dest = Containers.findEmptyInPlayerPart(menu);
+        if (dest == -1) {
             error("No free inventory slot for the shulker.");
             abort();
             return;
         }
 
         shulkerHomeSlot = from;
-        Containers.moveStack(menu, from, to);
+        Containers.moveStack(menu, from, dest);
     }
 
     private void placeShulker() {
@@ -319,9 +363,9 @@ public class ElytraResupply extends Module {
             return;
         }
 
-        FindItemResult shulker = InvUtils.findInHotbar(Items.SHULKER_BOX);
+        FindItemResult shulker = InvUtils.findInHotbar(Containers::isShulker);
         if (!shulker.found()) {
-            if (!moveToHotbar(Items.SHULKER_BOX)) {
+            if (!moveToHotbar(Containers::isShulker)) {
                 error("Could not get the shulker into the hotbar.");
                 abort();
             }
@@ -404,13 +448,16 @@ public class ElytraResupply extends Module {
 
         AbstractContainerMenu menu = mc.player.containerMenu;
 
-        if (Containers.slotHas(menu, shulkerHomeSlot, Items.SHULKER_BOX)) {
+        if (shulkerHomeSlot != -1 && shulkerHomeSlot < menu.slots.size()
+            && Containers.isShulker(menu.slots.get(shulkerHomeSlot).getItem())) {
             mc.player.closeContainer();
             to(Phase.BREAK_CHEST);
             return;
         }
 
-        int from = Containers.findInPlayerPart(menu, Items.SHULKER_BOX);
+        if (!ready()) return;
+
+        int from = Containers.findInPlayerPart(menu, Containers::isShulker);
         if (from == -1) {
             // Nothing left to put back; move on rather than spin here.
             mc.player.closeContainer();
@@ -423,7 +470,7 @@ public class ElytraResupply extends Module {
     }
 
     /** Mines a block we placed and waits until the drop is actually back in the inventory. */
-    private void breakAndCollect(BlockPos pos, Item expected, Phase next) {
+    private void breakAndCollect(BlockPos pos, Predicate<ItemStack> expected, boolean needsSilk, Phase next) {
         if (pos == null) {
             to(next);
             return;
@@ -437,15 +484,59 @@ public class ElytraResupply extends Module {
             return;
         }
 
-        if (expected == Items.ENDER_CHEST) {
-            int silk = findSilkTouch();
-            if (silk != -1) InvUtils.swap(silk, false);
+        if (needsSilk) {
+            int silk = silkTouchInHotbar();
+            // Still being fetched from storage: wait for it rather than mining the chest
+            // into obsidian with whatever happens to be in hand.
+            if (silk == -1) return;
+            InvUtils.swap(silk, false);
         }
 
         BlockUtils.breakBlock(pos, true);
     }
 
+    /**
+     * Gets back off the ground. Baritone is given the destination but does not take off by
+     * itself, so without this the flight resumes only in name.
+     *
+     * <p>Jump, then jump again in the air: that is the same input path a player uses, so
+     * vanilla's own code sends the start-fall-flying packet and the server agrees we are
+     * gliding. Setting the flag client-side would only desync.
+     */
+    private void takeoff() {
+        if (mc.player.isFallFlying()) {
+            mc.options.keyJump.setDown(false);
+            to(Phase.RESUME);
+            return;
+        }
+
+        if (elytraDamageLeft() <= 0) {
+            warning("Elytra has no durability left; not taking off.");
+            mc.options.keyJump.setDown(false);
+            to(Phase.RESUME);
+            return;
+        }
+
+        // Hop, let go, then press again once airborne.
+        if (phaseTicks < 3) mc.options.keyJump.setDown(true);
+        else if (phaseTicks < 6) mc.options.keyJump.setDown(false);
+        else mc.options.keyJump.setDown(!mc.player.onGround());
+    }
+
     private void resume() {
+        // Put the pickaxe back where it was found, so the hotbar is left as we got it.
+        if (pickaxeHomeSlot != -1) {
+            int silk = -1;
+            for (int i = 0; i < 9; i++) {
+                ItemStack stack = mc.player.getInventory().getItem(i);
+                if (!stack.isEmpty() && hasSilkTouch(stack)) {
+                    silk = i;
+                    break;
+                }
+            }
+            if (silk != -1) InvUtils.move().fromHotbar(silk).to(pickaxeHomeSlot);
+        }
+
         BlockPos target = resumeTarget;
         reset();
 
@@ -501,7 +592,11 @@ public class ElytraResupply extends Module {
     }
 
     private boolean moveToHotbar(Item item) {
-        FindItemResult found = InvUtils.find(item);
+        return moveToHotbar(stack -> stack.is(item));
+    }
+
+    private boolean moveToHotbar(Predicate<ItemStack> match) {
+        FindItemResult found = InvUtils.find(match);
         if (!found.found()) return false;
         if (found.isHotbar()) return true;
 
@@ -533,13 +628,51 @@ public class ElytraResupply extends Module {
         return Integer.MAX_VALUE;
     }
 
-    /** Hotbar slot of a Silk Touch pickaxe, or -1. */
+    /**
+     * Inventory slot of a Silk Touch tool, anywhere on the player, or -1.
+     *
+     * <p>Scans the whole inventory rather than just the hotbar: a pickaxe kept in storage is
+     * still a pickaxe, and refusing to start because it was not on the bar was needless.
+     * {@link #silkTouchInHotbar()} is what brings it down when it is actually needed.
+     */
     private int findSilkTouch() {
-        for (int i = 0; i < 9; i++) {
-            ItemStack stack = mc.player.getInventory().getItem(i);
+        var inv = mc.player.getInventory();
+        for (int i = 0; i < inv.getContainerSize(); i++) {
+            ItemStack stack = inv.getItem(i);
             if (stack.isEmpty()) continue;
             if (hasSilkTouch(stack)) return i;
         }
+        return -1;
+    }
+
+    /**
+     * Hotbar slot holding a Silk Touch tool, bringing it down from storage if needed.
+     *
+     * @return the hotbar slot, or -1 if there is no such tool or no room for it
+     */
+    private int silkTouchInHotbar() {
+        for (int i = 0; i < 9; i++) {
+            ItemStack stack = mc.player.getInventory().getItem(i);
+            if (!stack.isEmpty() && hasSilkTouch(stack)) return i;
+        }
+
+        int stored = findSilkTouch();
+        if (stored == -1) return -1;
+
+        // Swap it against a hotbar slot rather than needing an empty one: a travelling
+        // inventory is usually full, and the displaced stack comes straight back when the
+        // pickaxe goes home after the chest is broken.
+        int target = -1;
+        for (int i = 0; i < 9; i++) {
+            if (mc.player.getInventory().getItem(i).isEmpty()) {
+                target = i;
+                break;
+            }
+        }
+        if (target == -1) target = 8;
+
+        if (pickaxeHomeSlot == -1) pickaxeHomeSlot = stored;
+        InvUtils.move().from(stored).toHotbar(target);
         return -1;
     }
 

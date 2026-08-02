@@ -161,7 +161,16 @@ Silk Touch → pick it up.
 | `xp-bottles` | 64 | Bottles to take out per mending session. |
 | `require-silk-touch` | on | Refuse to place the chest without one, or it breaks to obsidian. |
 | `void-clearance` | 3 | Solid blocks required under the spot before placing anything. |
+| `action-delay` | 4 | Ticks between actions. Instant clicks look nothing like a player. |
+| `container-settle` | 10 | Ticks to wait after a container opens before reading it. |
+| `auto-takeoff` | on | Jump and open the elytra after resupplying. |
 | `debug` | **on** | Logs every phase transition. Leave it on until you trust it. |
+
+The Silk Touch tool is found **anywhere in your inventory**, pulled into the hotbar when the
+chest needs breaking, and put back in its original slot afterwards.
+
+Dyed shulker boxes are matched too — each colour is a separate item, so checking for plain
+`SHULKER_BOX` alone makes a full ender chest read as empty.
 
 **Requires Meteor's Baritone fork**, and the elytra must carry **Mending** — XP bottles only
 repair through that enchantment.
