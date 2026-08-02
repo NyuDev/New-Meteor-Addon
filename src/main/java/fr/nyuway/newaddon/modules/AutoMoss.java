@@ -12,6 +12,8 @@ import meteordevelopment.meteorclient.settings.IntSetting;
 import meteordevelopment.meteorclient.settings.Setting;
 import meteordevelopment.meteorclient.settings.SettingGroup;
 import meteordevelopment.meteorclient.systems.modules.Module;
+import meteordevelopment.meteorclient.systems.modules.Modules;
+import meteordevelopment.meteorclient.systems.modules.combat.KillAura;
 import meteordevelopment.meteorclient.utils.player.FindItemResult;
 import meteordevelopment.meteorclient.utils.player.InvUtils;
 import meteordevelopment.meteorclient.utils.player.Rotations;
@@ -24,6 +26,7 @@ import net.minecraft.tags.BlockTags;
 import net.minecraft.util.Mth;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.item.Items;
+import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.BlockHitResult;
@@ -40,7 +43,9 @@ import java.util.Arrays;
  * <ul>
  *   <li>{@code MossBlock#isValidBonemealTarget} requires the block above the moss to be
  *       <b>air</b>. Any other block - not just a solid one - makes the moss an invalid
- *       target and the bone meal does nothing.</li>
+ *       target and the bone meal does nothing. In practice wild moss is almost always
+ *       covered in grass, moss carpet or azalea, which is what {@code clear-obstructions}
+ *       exists to deal with.</li>
  *   <li>The patch walks every column in a small radius around that origin, drops down
  *       through air, and converts the first block it lands on if it is in
  *       {@code #minecraft:moss_replaceable} (the stone and dirt families). A block with
@@ -53,14 +58,14 @@ import java.util.Arrays;
  * Bone meal is consumed whenever the patch places, even if it only grows decorative
  * vegetation on moss that is already there. So a moss block having air above it is
  * necessary but not sufficient - this module also verifies at least
- * {@link #minConversions} nearby columns would really turn into moss, and only then
+ * {@code min-conversions} nearby columns would really turn into moss, and only then
  * spends an item.
  *
  * <h2>Cost</h2>
  * The search offsets are precomputed once per range change and sorted by distance, so a
  * scan walks blocks nearest-first and returns on the first usable target. Nothing is
  * allocated per tick, and the scan is skipped entirely on cooldown ticks unless the
- * highlight needs refreshing.
+ * highlight or the debug readout needs refreshing.
  */
 public class AutoMoss extends Module {
 
@@ -73,8 +78,14 @@ public class AutoMoss extends Module {
     /** Offsets are packed into a single int, so each component is biased into a byte. */
     private static final int PACK_BIAS = 64;
 
+    /** Air an azalea needs above it before growing one into a tree is worth a bone meal. */
+    private static final int AZALEA_HEADROOM = 5;
+
     private final SettingGroup sgGeneral = settings.getDefaultGroup();
+    private final SettingGroup sgClear = settings.createGroup("Obstructions");
+    private final SettingGroup sgAzalea = settings.createGroup("Azalea");
     private final SettingGroup sgRender = settings.createGroup("Render");
+    private final SettingGroup sgDebug = settings.createGroup("Debug");
 
     private final Setting<Double> range = sgGeneral.add(new DoubleSetting.Builder()
         .name("range")
@@ -106,13 +117,20 @@ public class AutoMoss extends Module {
 
     private final Setting<Integer> delay = sgGeneral.add(new IntSetting.Builder()
         .name("delay")
-        .description("Ticks to wait between two bone meals.")
+        .description("Ticks to wait between two actions.")
         .defaultValue(4).min(0).max(20).sliderMin(0).sliderMax(20)
+        .build());
+
+    private final Setting<Boolean> pauseOnKillAura = sgGeneral.add(new BoolSetting.Builder()
+        .name("pause-on-killaura")
+        .description("Stop entirely while KillAura is active, so hotbar swaps and rotations " +
+                     "never fight with combat.")
+        .defaultValue(true)
         .build());
 
     private final Setting<Boolean> rotate = sgGeneral.add(new BoolSetting.Builder()
         .name("rotate")
-        .description("Face the moss block before using the bone meal.")
+        .description("Face the block before acting on it.")
         .defaultValue(true)
         .build());
 
@@ -128,9 +146,40 @@ public class AutoMoss extends Module {
         .defaultValue(true)
         .build());
 
+    private final Setting<Boolean> clearObstructions = sgClear.add(new BoolSetting.Builder()
+        .name("clear-obstructions")
+        .description("Break the grass, carpet or plant sitting on a moss block when that moss " +
+                     "would otherwise be worth bone mealing. Only blocks that break instantly " +
+                     "are touched, so this never digs through real blocks.")
+        .defaultValue(true)
+        .build());
+
+    private final Setting<Boolean> growAzalea = sgAzalea.add(new BoolSetting.Builder()
+        .name("grow-azalea")
+        .description("Occasionally bone meal an azalea bush into an azalea tree. Off by " +
+                     "default: every bone meal spent here is one not spent converting stone.")
+        .defaultValue(false)
+        .build());
+
+    private final Setting<Integer> azaleaInterval = sgAzalea.add(new IntSetting.Builder()
+        .name("azalea-interval")
+        .description("Seconds between two azalea attempts. Vanilla only succeeds about 45% of " +
+                     "the time, so a bush usually takes a few tries.")
+        .defaultValue(30).min(1).max(300).sliderMin(5).sliderMax(120)
+        .visible(growAzalea::get)
+        .build());
+
+    private final Setting<Integer> azaleaSpacing = sgAzalea.add(new IntSetting.Builder()
+        .name("azalea-spacing")
+        .description("Skip a bush when azalea leaves are already within this many blocks, so " +
+                     "trees do not crowd each other. 0 disables the check.")
+        .defaultValue(4).min(0).max(8).sliderMin(0).sliderMax(8)
+        .visible(growAzalea::get)
+        .build());
+
     private final Setting<Boolean> render = sgRender.add(new BoolSetting.Builder()
         .name("render")
-        .description("Highlight the moss block currently being targeted.")
+        .description("Highlight the block currently being targeted.")
         .defaultValue(true)
         .build());
 
@@ -143,16 +192,44 @@ public class AutoMoss extends Module {
 
     private final Setting<SettingColor> sideColor = sgRender.add(new ColorSetting.Builder()
         .name("side-color")
-        .description("Fill colour of the highlight.")
+        .description("Fill colour of the bone meal target.")
         .defaultValue(new SettingColor(89, 204, 108, 40))
         .visible(render::get)
         .build());
 
     private final Setting<SettingColor> lineColor = sgRender.add(new ColorSetting.Builder()
         .name("line-color")
-        .description("Outline colour of the highlight.")
+        .description("Outline colour of the bone meal target.")
         .defaultValue(new SettingColor(89, 204, 108, 190))
         .visible(render::get)
+        .build());
+
+    private final Setting<SettingColor> clearSideColor = sgRender.add(new ColorSetting.Builder()
+        .name("clear-side-color")
+        .description("Fill colour of a block about to be cleared away.")
+        .defaultValue(new SettingColor(225, 145, 55, 40))
+        .visible(render::get)
+        .build());
+
+    private final Setting<SettingColor> clearLineColor = sgRender.add(new ColorSetting.Builder()
+        .name("clear-line-color")
+        .description("Outline colour of a block about to be cleared away.")
+        .defaultValue(new SettingColor(225, 145, 55, 190))
+        .visible(render::get)
+        .build());
+
+    private final Setting<Boolean> debug = sgDebug.add(new BoolSetting.Builder()
+        .name("debug")
+        .description("Log what the scan is finding to the game log. Use this when the module " +
+                     "looks idle: it says whether moss was seen at all, and why it was skipped.")
+        .defaultValue(false)
+        .build());
+
+    private final Setting<Integer> debugInterval = sgDebug.add(new IntSetting.Builder()
+        .name("debug-interval")
+        .description("Ticks between two log lines (20 ticks = 1 second).")
+        .defaultValue(20).min(5).max(200).sliderMin(10).sliderMax(100)
+        .visible(debug::get)
         .build());
 
     /** Search offsets around the player, sorted nearest-first. Rebuilt when range changes. */
@@ -162,9 +239,19 @@ public class AutoMoss extends Module {
     /** Reused across the whole scan so a tick allocates nothing. */
     private final BlockPos.MutableBlockPos scanPos = new BlockPos.MutableBlockPos();
     private final BlockPos.MutableBlockPos columnPos = new BlockPos.MutableBlockPos();
+    private final BlockPos.MutableBlockPos auxPos = new BlockPos.MutableBlockPos();
 
-    private BlockPos target;
+    private BlockPos mossTarget;
+    private BlockPos clearTarget;
+    private BlockPos azaleaTarget;
+    private Block azaleaBlock;
+
     private int timer;
+    private int azaleaTimer;
+    private int ticks;
+
+    // Scan counters, only meaningful when debug is on (the scan runs in full then).
+    private int seenMoss, seenMossWithAir, seenMossObstructed, seenMossTooPoor;
 
     public AutoMoss() {
         super(NewAddon.CATEGORY, "auto-moss",
@@ -173,8 +260,12 @@ public class AutoMoss extends Module {
 
     @Override
     public void onActivate() {
-        target = null;
+        mossTarget = null;
+        clearTarget = null;
+        azaleaTarget = null;
         timer = 0;
+        azaleaTimer = 0;
+        ticks = 0;
         builtRadius = -1;
 
         if (mc.player != null && !InvUtils.findInHotbar(Items.BONE_MEAL).found()) {
@@ -184,44 +275,96 @@ public class AutoMoss extends Module {
 
     @Override
     public void onDeactivate() {
-        target = null;
+        mossTarget = null;
+        clearTarget = null;
+        azaleaTarget = null;
     }
 
     @EventHandler
     private void onTick(TickEvent.Pre event) {
         if (mc.player == null || mc.level == null) return;
 
-        boolean ready = timer <= 0;
-        if (!ready) timer--;
-
-        // On cooldown ticks the scan buys nothing unless the highlight needs refreshing.
-        if (!ready && !render.get()) return;
-
-        FindItemResult bonemeal = InvUtils.findInHotbar(Items.BONE_MEAL);
-        if (!bonemeal.found()) {
-            target = null;
+        if (pauseOnKillAura.get() && Modules.get().isActive(KillAura.class)) {
+            mossTarget = clearTarget = azaleaTarget = null;
             return;
         }
 
-        target = findTarget();
-        if (target == null || !ready) return;
+        ticks++;
 
-        timer = delay.get();
-        useBonemeal(target);
+        boolean ready = timer <= 0;
+        if (!ready) timer--;
+        if (azaleaTimer > 0) azaleaTimer--;
+
+        // On cooldown ticks the scan buys nothing unless something still needs it.
+        if (!ready && !render.get() && !debug.get()) return;
+
+        FindItemResult bonemeal = InvUtils.findInHotbar(Items.BONE_MEAL);
+        if (!bonemeal.found()) {
+            mossTarget = clearTarget = azaleaTarget = null;
+            if (debugDue()) log("idle: no bone meal in hotbar");
+            return;
+        }
+
+        boolean azaleaDue = growAzalea.get() && azaleaTimer <= 0;
+        scan(azaleaDue);
+
+        if (debugDue()) {
+            log("moss=%d withAir=%d obstructed=%d tooPoor=%d | target=%s clear=%s azalea=%s",
+                seenMoss, seenMossWithAir, seenMossObstructed, seenMossTooPoor,
+                mossTarget, clearTarget, azaleaTarget);
+        }
+
+        if (!ready) return;
+
+        // Azalea is rare by construction, so let it go first when its timer is up.
+        if (azaleaDue && azaleaTarget != null) {
+            azaleaTimer = azaleaInterval.get() * 20;
+            timer = delay.get();
+            useBonemeal(azaleaTarget, azaleaBlock);
+            return;
+        }
+
+        if (mossTarget != null) {
+            timer = delay.get();
+            useBonemeal(mossTarget, Blocks.MOSS_BLOCK);
+            return;
+        }
+
+        if (clearTarget != null) {
+            timer = delay.get();
+            clearBlock(clearTarget);
+        }
     }
 
     @EventHandler
     private void onRender(Render3DEvent event) {
-        if (!render.get() || target == null) return;
-        event.renderer.box(target, sideColor.get(), lineColor.get(), shapeMode.get(), 0);
+        if (!render.get()) return;
+
+        BlockPos bonemealBox = mossTarget != null ? mossTarget : azaleaTarget;
+        if (bonemealBox != null) {
+            event.renderer.box(bonemealBox, sideColor.get(), lineColor.get(), shapeMode.get(), 0);
+        }
+        if (clearTarget != null) {
+            event.renderer.box(clearTarget, clearSideColor.get(), clearLineColor.get(), shapeMode.get(), 0);
+        }
     }
 
     /**
-     * Returns the closest moss block worth bone mealing, or null if there is none.
-     * Rejections are ordered cheapest-first: reach, then the block itself, then air above,
-     * and only then the column walk that decides whether anything would convert.
+     * Single pass over the search volume, picking the closest of each kind of target:
+     * moss ready to bone meal, a block to clear off a moss that would otherwise qualify,
+     * and (when due) an azalea worth growing.
+     *
+     * <p>Rejections are ordered cheapest-first: reach, then the block itself, then what is
+     * above it, and only then the column walk that decides whether anything would convert.
+     * The pass stops at the first bone meal target unless debug is on, in which case it
+     * runs in full so the counters mean something.
      */
-    private BlockPos findTarget() {
+    private void scan(boolean azaleaDue) {
+        mossTarget = null;
+        clearTarget = null;
+        azaleaTarget = null;
+        seenMoss = seenMossWithAir = seenMossObstructed = seenMossTooPoor = 0;
+
         int radius = Mth.ceil(range.get());
         if (radius != builtRadius) rebuildOffsets(radius);
 
@@ -230,6 +373,8 @@ public class AutoMoss extends Module {
         BlockPos origin = mc.player.blockPosition();
         int ox = origin.getX(), oy = origin.getY(), oz = origin.getZ();
         int needed = minConversions.get();
+        boolean full = debug.get();
+        boolean wantClear = clearObstructions.get();
 
         for (int packed : offsets) {
             int x = ox + (((packed >> 16) & 0xFF) - PACK_BIAS);
@@ -240,16 +385,41 @@ public class AutoMoss extends Module {
             if (dx * dx + dy * dy + dz * dz > maxDistSq) continue;
 
             scanPos.set(x, y, z);
-            if (!mc.level.getBlockState(scanPos).is(Blocks.MOSS_BLOCK)) continue;
+            BlockState state = mc.level.getBlockState(scanPos);
 
-            // MossBlock#isValidBonemealTarget: the block above must be air, nothing else.
-            scanPos.set(x, y + 1, z);
-            if (!mc.level.getBlockState(scanPos).isAir()) continue;
+            if (state.is(Blocks.MOSS_BLOCK)) {
+                seenMoss++;
 
-            if (countConversions(x, y + 1, z, needed) >= needed) return new BlockPos(x, y, z);
+                scanPos.set(x, y + 1, z);
+                BlockState above = mc.level.getBlockState(scanPos);
+
+                if (above.isAir()) {
+                    // MossBlock#isValidBonemealTarget is satisfied; is it worth an item?
+                    seenMossWithAir++;
+                    if (countConversions(x, y + 1, z, needed) >= needed) {
+                        if (mossTarget == null) mossTarget = new BlockPos(x, y, z);
+                    } else {
+                        seenMossTooPoor++;
+                    }
+                } else if (wantClear && isClearable(scanPos, above)) {
+                    // Blocked, but only worth uncovering if the patch would then convert
+                    // something. Neighbouring columns read the same either way, so the
+                    // count is a valid prediction of the post-break result.
+                    seenMossObstructed++;
+                    if (clearTarget == null && countConversions(x, y + 1, z, needed) >= needed) {
+                        clearTarget = new BlockPos(x, y + 1, z);
+                    }
+                }
+            } else if (azaleaDue && azaleaTarget == null
+                       && (state.is(Blocks.AZALEA) || state.is(Blocks.FLOWERING_AZALEA))) {
+                if (isAzaleaWorthGrowing(x, y, z)) {
+                    azaleaTarget = new BlockPos(x, y, z);
+                    azaleaBlock = state.getBlock();
+                }
+            }
+
+            if (mossTarget != null && !full) return;
         }
-
-        return null;
     }
 
     /**
@@ -261,7 +431,7 @@ public class AutoMoss extends Module {
      * leaves the air gap sitting on the column's surface; the block underneath it is the one
      * the feature would replace.
      *
-     * @param ox x of the patch origin (the air block above the moss)
+     * @param ox x of the patch origin (the block above the moss)
      * @param oy y of the patch origin
      * @param oz z of the patch origin
      * @param needed stop and return once this many conversions are confirmed
@@ -310,19 +480,61 @@ public class AutoMoss extends Module {
             : state.is(BlockTags.MOSS_REPLACEABLE);
     }
 
-    private void useBonemeal(BlockPos pos) {
+    /**
+     * True if this block may be swept off a moss block. Restricted to blocks that break
+     * instantly, which covers grass, ferns, flowers, moss carpet and azalea bushes while
+     * never touching anything that would mean actually digging.
+     */
+    private boolean isClearable(BlockPos pos, BlockState state) {
+        if (state.isAir()) return false;
+        // Fluids have no collision and cannot be broken.
+        if (!state.getFluidState().isEmpty()) return false;
+        // Keep the bushes we are farming into trees.
+        if (growAzalea.get() && (state.is(Blocks.AZALEA) || state.is(Blocks.FLOWERING_AZALEA))) {
+            return false;
+        }
+        return BlockUtils.canBreak(pos, state) && BlockUtils.canInstaBreak(pos);
+    }
+
+    /** True if an azalea here has room to become a tree and is not crowding another one. */
+    private boolean isAzaleaWorthGrowing(int x, int y, int z) {
+        for (int i = 1; i <= AZALEA_HEADROOM; i++) {
+            auxPos.set(x, y + i, z);
+            if (!mc.level.getBlockState(auxPos).isAir()) return false;
+        }
+
+        int spacing = azaleaSpacing.get();
+        if (spacing == 0) return true;
+
+        for (int dx = -spacing; dx <= spacing; dx++) {
+            for (int dy = -spacing; dy <= spacing; dy++) {
+                for (int dz = -spacing; dz <= spacing; dz++) {
+                    auxPos.set(x + dx, y + dy, z + dz);
+                    BlockState state = mc.level.getBlockState(auxPos);
+                    if (state.is(Blocks.AZALEA_LEAVES) || state.is(Blocks.FLOWERING_AZALEA_LEAVES)) {
+                        return false;
+                    }
+                }
+            }
+        }
+
+        return true;
+    }
+
+    private void useBonemeal(BlockPos pos, Block expected) {
         if (rotate.get()) {
-            Rotations.rotate(Rotations.getYaw(pos), Rotations.getPitch(pos), 50, () -> interact(pos));
+            Rotations.rotate(Rotations.getYaw(pos), Rotations.getPitch(pos), 50,
+                () -> interact(pos, expected));
         } else {
-            interact(pos);
+            interact(pos, expected);
         }
     }
 
-    private void interact(BlockPos pos) {
+    private void interact(BlockPos pos, Block expected) {
         // With rotation this runs a tick or more later, so re-check everything: the module
-        // may have been toggled off, the moss mined, or the hotbar rearranged since.
+        // may have been toggled off, the block changed, or the hotbar rearranged since.
         if (!isActive() || mc.player == null || mc.level == null) return;
-        if (!mc.level.getBlockState(pos).is(Blocks.MOSS_BLOCK)) return;
+        if (!mc.level.getBlockState(pos).is(expected)) return;
 
         FindItemResult bonemeal = InvUtils.findInHotbar(Items.BONE_MEAL);
         if (!bonemeal.found()) return;
@@ -334,6 +546,31 @@ public class AutoMoss extends Module {
             swing.get()
         );
         if (swapBack.get()) InvUtils.swapBack();
+    }
+
+    private void clearBlock(BlockPos pos) {
+        if (rotate.get()) {
+            Rotations.rotate(Rotations.getYaw(pos), Rotations.getPitch(pos), 50, () -> doClear(pos));
+        } else {
+            doClear(pos);
+        }
+    }
+
+    private void doClear(BlockPos pos) {
+        if (!isActive() || mc.player == null || mc.level == null) return;
+
+        BlockState state = mc.level.getBlockState(pos);
+        if (!isClearable(pos, state)) return;
+
+        BlockUtils.breakBlock(pos, swing.get());
+    }
+
+    private boolean debugDue() {
+        return debug.get() && ticks % debugInterval.get() == 0;
+    }
+
+    private void log(String fmt, Object... args) {
+        NewAddon.LOG.info("[AutoMoss] " + String.format(fmt, args));
     }
 
     /**
