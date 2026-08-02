@@ -73,6 +73,24 @@ goes through the game server, so there is nothing to see, log, or rate-limit.
 The secret is masked in the settings panel, but Meteor still stores every setting in plain
 text in its config. Do not reuse a password there.
 
+## AutoStasisPull
+
+Same idea as Meteor's AutoLog, different ending: instead of dropping the connection and
+leaving your body in the world, it pulls you somewhere safe and you stay logged in. Firing
+is delegated to StasisPull, so whichever transport you set there is what gets used.
+
+| Setting | Default | |
+| --- | --- | --- |
+| `disable-autolog` | on | Switch Meteor's AutoLog off, so you aren't pulled *and* disconnected. |
+| `toggle-off` | on | Turn off after a pull instead of firing repeatedly. |
+| `health` / `health-level` | on / 8 | Pull at or below this health. |
+| `count-absorption` | on | Count golden-apple absorption as health. |
+| `totem-pops` | 1 | Pull after this many totems pop. 0 disables. |
+| `players` / `player-range` | off / 16 | Pull when a non-friend gets this close. |
+
+Separate module rather than a patch into AutoLog's panel: hooking Meteor's own module would
+have to survive twelve Meteor versions, and `AutoLog` has already moved package between them.
+
 ## Supported versions
 
 | Minecraft | Meteor | Java |

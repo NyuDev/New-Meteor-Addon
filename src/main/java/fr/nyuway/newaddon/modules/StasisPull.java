@@ -137,6 +137,15 @@ public class StasisPull extends Module {
         }
     }
 
+    /** True if the current mode has everything it needs to actually send something. */
+    public boolean isConfigured() {
+        return switch (mode.get()) {
+            case Chat -> !messages.get().isEmpty();
+            case Whisper -> !messages.get().isEmpty() && !botName.get().isBlank();
+            case Http -> !endpoint.get().isBlank() && !secret.get().isBlank();
+        };
+    }
+
     /** Sends one pull request. Public so other modules can trigger it. */
     public void pull() {
         if (mc.player == null) return;
