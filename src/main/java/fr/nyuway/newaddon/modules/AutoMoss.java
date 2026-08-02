@@ -207,7 +207,7 @@ public class AutoMoss extends Module {
         if (target == null || !ready) return;
 
         timer = delay.get();
-        useBonemeal(target, bonemeal);
+        useBonemeal(target);
     }
 
     @EventHandler
@@ -310,17 +310,22 @@ public class AutoMoss extends Module {
             : state.is(BlockTags.MOSS_REPLACEABLE);
     }
 
-    private void useBonemeal(BlockPos pos, FindItemResult bonemeal) {
+    private void useBonemeal(BlockPos pos) {
         if (rotate.get()) {
-            Rotations.rotate(Rotations.getYaw(pos), Rotations.getPitch(pos), 50, () -> interact(pos, bonemeal));
+            Rotations.rotate(Rotations.getYaw(pos), Rotations.getPitch(pos), 50, () -> interact(pos));
         } else {
-            interact(pos, bonemeal);
+            interact(pos);
         }
     }
 
-    private void interact(BlockPos pos, FindItemResult bonemeal) {
-        // With rotation this runs a tick or more later, so the world may have moved on.
-        if (mc.level == null || !mc.level.getBlockState(pos).is(Blocks.MOSS_BLOCK)) return;
+    private void interact(BlockPos pos) {
+        // With rotation this runs a tick or more later, so re-check everything: the module
+        // may have been toggled off, the moss mined, or the hotbar rearranged since.
+        if (!isActive() || mc.player == null || mc.level == null) return;
+        if (!mc.level.getBlockState(pos).is(Blocks.MOSS_BLOCK)) return;
+
+        FindItemResult bonemeal = InvUtils.findInHotbar(Items.BONE_MEAL);
+        if (!bonemeal.found()) return;
 
         InvUtils.swap(bonemeal.slot(), swapBack.get());
         BlockUtils.interact(
