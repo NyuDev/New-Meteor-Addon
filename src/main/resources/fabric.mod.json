@@ -1,0 +1,36 @@
+{
+	"schemaVersion": 1,
+	"id": "new",
+	"version": "${version}",
+	"name": "New",
+	"description": "Meteor Client addon by NyuDev. A new generation of modules, built for every Minecraft version.",
+	"authors": [
+		"NyuDev"
+	],
+	"contact": {
+		"homepage": "https://github.com/NyuDev/New-Meteor-Addon",
+		"sources": "https://github.com/NyuDev/New-Meteor-Addon",
+		"issues": "https://github.com/NyuDev/New-Meteor-Addon/issues"
+	},
+	"license": "MIT",
+	"environment": "client",
+	"entrypoints": {
+		"meteor": [
+			"fr.nyuway.newaddon.NewAddon"
+		]
+	},
+	"mixins": [
+		"new.mixins.json"
+	],
+	"depends": {
+		"fabricloader": ">=0.16.0",
+		"minecraft": "${minecraft_version}",
+		"java": ">=21",
+		"meteor-client": "*"
+	},
+	"custom": {
+		"modmenu": {
+			"parent": "meteor-client"
+		}
+	}
+}
