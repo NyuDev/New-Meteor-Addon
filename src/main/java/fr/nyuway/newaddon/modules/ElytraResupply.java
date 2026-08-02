@@ -201,6 +201,8 @@ public class ElytraResupply extends Module {
     private BlockPos resumeTarget;
     /** What this run is for; a run may need only one of the two. */
     private boolean needFireworks, needMending, needElytraSwap;
+    /** Ender-chest slots we already opened this trip, so we do not keep grabbing the same box. */
+    private final java.util.Set<Integer> triedShulkerSlots = new java.util.HashSet<>();
 
     public ElytraResupply() {
         super(NewAddon.CATEGORY, "elytra-resupply",
@@ -229,6 +231,7 @@ public class ElytraResupply extends Module {
         pickaxeHomeSlot = -1;
         resumeTarget = null;
         needFireworks = needMending = needElytraSwap = false;
+        triedShulkerSlots.clear();
 
         if (walkingToDrop) {
             BaritoneBridge.cancel();
@@ -429,6 +432,12 @@ public class ElytraResupply extends Module {
         if (from == -1) {
             // Keep waiting on a slow sync; only abort once we know the chest has content.
             if (Containers.isContainerEmpty(menu)) return;
+            // We've already emptied at least one shulker this trip; press on with what we got.
+            if (!triedShulkerSlots.isEmpty()) {
+                mc.player.closeContainer();
+                finishAfterGathering();
+                return;
+            }
             if (Containers.findInContainer(menu, Containers::isShulker) == -1) {
                 error("Ender chest has items but no shulker box in it.");
             } else {
@@ -448,6 +457,7 @@ public class ElytraResupply extends Module {
         }
 
         shulkerHomeSlot = from;
+        triedShulkerSlots.add(from);
         Containers.moveStack(menu, from, dest);
     }
 
@@ -509,7 +519,15 @@ public class ElytraResupply extends Module {
         }
 
         mc.player.closeContainer();
-        to(needMending ? Phase.REPAIR : Phase.RETURN_SUPPLIES);
+        if (stillNeedSupplies()) {
+            // This box didn't have everything; skip returning supplies (we want to keep what we got)
+            // and go break/return it so the next iteration can open another shulker.
+            to(Phase.BREAK_SHULKER);
+        } else if (needMending && countInventory(Items.EXPERIENCE_BOTTLE) > 0) {
+            to(Phase.REPAIR);
+        } else {
+            to(Phase.RETURN_SUPPLIES);
+        }
     }
 
     /**
@@ -544,6 +562,11 @@ public class ElytraResupply extends Module {
     }
 
     private void returnSupplies() {
+        if (shulkerPos == null) {
+            // No shulker to give leftovers back to; keep them and move on.
+            to(Phase.BREAK_CHEST);
+            return;
+        }
         if (!isContainerOpen()) {
             openBlock(shulkerPos, Phase.RETURN_SUPPLIES);
             return;
@@ -568,8 +591,15 @@ public class ElytraResupply extends Module {
 
         if (shulkerHomeSlot != -1 && shulkerHomeSlot < menu.slots.size()
             && Containers.isShulker(menu.slots.get(shulkerHomeSlot).getItem())) {
-            mc.player.closeContainer();
-            to(Phase.BREAK_CHEST);
+            // Shulker is safely back. If we still need something, keep the chest open and grab another.
+            if (stillNeedSupplies()) {
+                shulkerHomeSlot = -1;
+                shulkerPos = null;
+                to(Phase.TAKE_SHULKER);
+            } else {
+                mc.player.closeContainer();
+                to(needMending && countInventory(Items.EXPERIENCE_BOTTLE) > 0 ? Phase.REPAIR : Phase.BREAK_CHEST);
+            }
             return;
         }
 
@@ -1001,6 +1031,7 @@ public class ElytraResupply extends Module {
     private int findUsefulShulker(AbstractContainerMenu menu) {
         int size = Containers.containerSize(menu);
         for (int i = 0; i < size; i++) {
+            if (triedShulkerSlots.contains(i)) continue;
             ItemStack s = menu.slots.get(i).getItem();
             if (!s.isEmpty() && Containers.isShulker(s) && shulkerHasNeededSupplies(s)) return i;
         }
@@ -1009,13 +1040,17 @@ public class ElytraResupply extends Module {
 
     /** Checks the stored contents of a shulker box item for at least one needed supply. */
     private boolean shulkerHasNeededSupplies(ItemStack shulker) {
+        boolean lookFireworks = needFireworks && countInventory(Items.FIREWORK_ROCKET) < targetFireworks.get();
+        boolean lookBottles = needMending && countInventory(Items.EXPERIENCE_BOTTLE) < xpBottles.get();
+        boolean lookElytra = needElytraSwap && findSpareElytra() == -1;
+        if (!lookFireworks && !lookBottles && !lookElytra) return false;
         //? if >=1.21 {
         var contents = shulker.get(net.minecraft.core.component.DataComponents.CONTAINER);
         if (contents == null) return false;
         for (ItemStack stack : contents.nonEmptyItems()) {
-            if (needFireworks && stack.is(Items.FIREWORK_ROCKET)) return true;
-            if (needMending && stack.is(Items.EXPERIENCE_BOTTLE)) return true;
-            if (needElytraSwap && stack.is(Items.ELYTRA)) return true;
+            if (lookFireworks && stack.is(Items.FIREWORK_ROCKET)) return true;
+            if (lookBottles && stack.is(Items.EXPERIENCE_BOTTLE)) return true;
+            if (lookElytra && stack.is(Items.ELYTRA)) return true;
         }
         return false;
         //?} else {
@@ -1024,9 +1059,9 @@ public class ElytraResupply extends Module {
         var list = tag.getCompound("BlockEntityTag").getList("Items", 10);
         for (int i = 0; i < list.size(); i++) {
             var id = list.getCompound(i).getString("id");
-            if (needFireworks && id.equals("minecraft:firework_rocket")) return true;
-            if (needMending && id.equals("minecraft:experience_bottle")) return true;
-            if (needElytraSwap && id.equals("minecraft:elytra")) return true;
+            if (lookFireworks && id.equals("minecraft:firework_rocket")) return true;
+            if (lookBottles && id.equals("minecraft:experience_bottle")) return true;
+            if (lookElytra && id.equals("minecraft:elytra")) return true;
         }
         return false;
         *///?}
@@ -1040,6 +1075,23 @@ public class ElytraResupply extends Module {
             if (stack.is(Items.ELYTRA) && (stack.getMaxDamage() - stack.getDamageValue()) > 0) return i;
         }
         return -1;
+    }
+
+    /** True while any target is still under quota; drives the multi-shulker loop. */
+    private boolean stillNeedSupplies() {
+        if (needFireworks && countInventory(Items.FIREWORK_ROCKET) < targetFireworks.get()) return true;
+        if (needMending && countInventory(Items.EXPERIENCE_BOTTLE) < xpBottles.get()) return true;
+        if (needElytraSwap && findSpareElytra() == -1) return true;
+        return false;
+    }
+
+    /** Called from takeShulker when no untried shulker in the ender chest can help any further. */
+    private void finishAfterGathering() {
+        if (needMending && countInventory(Items.EXPERIENCE_BOTTLE) > 0) {
+            to(Phase.REPAIR);
+        } else {
+            to(Phase.BREAK_CHEST);
+        }
     }
 
     private void log(String fmt, Object... args) {
