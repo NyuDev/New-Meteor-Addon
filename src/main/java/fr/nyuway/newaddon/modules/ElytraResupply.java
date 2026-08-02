@@ -22,6 +22,7 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.util.Mth;
 import net.minecraft.world.InteractionHand;
+import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.inventory.AbstractContainerMenu;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
@@ -62,9 +63,9 @@ public class ElytraResupply extends Module {
     private enum Phase {
         IDLE,
         PLACE_CHEST, OPEN_CHEST, TAKE_SHULKER, PLACE_SHULKER, OPEN_SHULKER, TAKE_SUPPLIES,
-        REPAIR,
+        REPAIR, SWAP_ELYTRA,
         RETURN_SUPPLIES, BREAK_SHULKER, RETURN_SHULKER, BREAK_CHEST,
-        TAKEOFF, RESUME
+        TAKEOFF, WAIT_DISCONNECT, RESUME
     }
 
     /** Ticks any single phase may take before the run is treated as failed. */
@@ -172,6 +173,12 @@ public class ElytraResupply extends Module {
         .defaultValue(true)
         .build());
 
+    private final Setting<Boolean> disconnectWhenDone = sgGeneral.add(new BoolSetting.Builder()
+        .name("disconnect-when-done")
+        .description("Disconnect once the trip ends or when unable to continue (waits until landed).")
+        .defaultValue(false)
+        .build());
+
     private Phase phase = Phase.IDLE;
     private int phaseTicks;
 
@@ -193,7 +200,7 @@ public class ElytraResupply extends Module {
     /** Destination Baritone was flying to, captured before it gave up. */
     private BlockPos resumeTarget;
     /** What this run is for; a run may need only one of the two. */
-    private boolean needFireworks, needMending;
+    private boolean needFireworks, needMending, needElytraSwap;
 
     public ElytraResupply() {
         super(NewAddon.CATEGORY, "elytra-resupply",
@@ -221,7 +228,7 @@ public class ElytraResupply extends Module {
         shulkerHomeSlot = -1;
         pickaxeHomeSlot = -1;
         resumeTarget = null;
-        needFireworks = needMending = false;
+        needFireworks = needMending = needElytraSwap = false;
 
         if (walkingToDrop) {
             BaritoneBridge.cancel();
@@ -257,6 +264,10 @@ public class ElytraResupply extends Module {
         }
 
         if (++phaseTicks > PHASE_TIMEOUT) {
+            if (phase == Phase.WAIT_DISCONNECT) {
+                phaseTicks = PHASE_TIMEOUT; // keep waiting until landed
+                return;
+            }
             warning("Phase %s timed out; cleaning up.", phase);
             abort();
             return;
@@ -276,6 +287,8 @@ public class ElytraResupply extends Module {
             case BREAK_CHEST -> breakAndCollect(chestPos, s -> s.is(Items.ENDER_CHEST), true,
                 autoTakeoff.get() ? Phase.TAKEOFF : Phase.RESUME);
             case TAKEOFF -> takeoff();
+            case WAIT_DISCONNECT -> waitAndDisconnect();
+            case SWAP_ELYTRA -> swapElytra();
             case RESUME -> resume();
             default -> { }
         }
@@ -322,16 +335,22 @@ public class ElytraResupply extends Module {
 
         needFireworks = countInventory(Items.FIREWORK_ROCKET) <= minFireworks.get();
         needMending = elytraDamageLeft() < minElytraDurability.get();
-        if (!needFireworks && !needMending) return;
+        needElytraSwap = elytraDamageLeft() <= 0;
+        if (!needFireworks && !needMending) {
+            if (disconnectWhenDone.get()) to(Phase.WAIT_DISCONNECT);
+            return;
+        }
 
         if (requireSilkTouch.get() && findSilkTouch() == -1) {
             error("Landed and low on supplies, but no Silk Touch pickaxe - not placing a chest.");
             resumeTarget = null;
+            if (disconnectWhenDone.get()) to(Phase.WAIT_DISCONNECT);
             return;
         }
         if (!InvUtils.find(Items.ENDER_CHEST).found()) {
             error("Landed and low on supplies, but no ender chest on me.");
             resumeTarget = null;
+            if (disconnectWhenDone.get()) to(Phase.WAIT_DISCONNECT);
             return;
         }
 
@@ -481,6 +500,11 @@ public class ElytraResupply extends Module {
             if (pullOne(menu, Items.FIREWORK_ROCKET, hotbarFirst.get())) return;
         }
 
+        // Proactively grab a spare elytra if the current one is broken and we don't already carry one.
+        if (needElytraSwap && findSpareElytra() == -1) {
+            if (pullOne(menu, Items.ELYTRA, false)) return;
+        }
+
         mc.player.closeContainer();
         to(needMending ? Phase.REPAIR : Phase.RETURN_SUPPLIES);
     }
@@ -501,7 +525,7 @@ public class ElytraResupply extends Module {
         if (!bottle.found()) {
             if (!moveToHotbar(Items.EXPERIENCE_BOTTLE)) {
                 warning("Out of XP bottles; elytra still damaged.");
-                to(Phase.RETURN_SUPPLIES);
+                to(findSpareElytra() != -1 ? Phase.SWAP_ELYTRA : Phase.RETURN_SUPPLIES);
             }
             return;
         }
@@ -637,9 +661,13 @@ public class ElytraResupply extends Module {
             return;
         }
 
-        // Hop, let go, then press again once airborne.
-        if (phaseTicks < 3) mc.options.keyJump.setDown(true);
-        else if (phaseTicks < 6) mc.options.keyJump.setDown(false);
+        // Cycle the jump sequence; if still grounded after a full attempt, restart automatically.
+        int tick = phaseTicks % 20;
+        if (phaseTicks >= 20 && tick == 0 && mc.player.onGround()) {
+            if (debug.get()) log("Still on ground after jump attempt; retrying takeoff.");
+        }
+        if (tick < 3) mc.options.keyJump.setDown(true);
+        else if (tick < 6) mc.options.keyJump.setDown(false);
         else mc.options.keyJump.setDown(!mc.player.onGround());
     }
 
@@ -686,6 +714,10 @@ public class ElytraResupply extends Module {
 
         if (resumeTarget != null) {
             to(autoTakeoff.get() ? Phase.TAKEOFF : Phase.RESUME);
+            return;
+        }
+        if (disconnectWhenDone.get()) {
+            to(Phase.WAIT_DISCONNECT);
             return;
         }
         reset();
@@ -770,10 +802,8 @@ public class ElytraResupply extends Module {
 
     /** Remaining durability of the worn elytra, or a large number when none is worn. */
     private int elytraDamageLeft() {
-        for (int i = 0; i < mc.player.getInventory().getContainerSize(); i++) {
-            ItemStack stack = mc.player.getInventory().getItem(i);
-            if (stack.is(Items.ELYTRA)) return stack.getMaxDamage() - stack.getDamageValue();
-        }
+        ItemStack equipped = mc.player.getItemBySlot(EquipmentSlot.CHEST);
+        if (equipped.is(Items.ELYTRA)) return equipped.getMaxDamage() - equipped.getDamageValue();
         return Integer.MAX_VALUE;
     }
 
@@ -933,6 +963,46 @@ public class ElytraResupply extends Module {
         }
 
         return true;
+    }
+
+    private void swapElytra() {
+        if (isContainerOpen()) {
+            mc.player.closeContainer();
+            return;
+        }
+        if (!ready()) return;
+
+        int spare = findSpareElytra();
+        if (spare == -1) {
+            warning("No spare elytra in inventory; continuing without swap.");
+            to(Phase.RETURN_SUPPLIES);
+            return;
+        }
+        // InventoryMenu: hotbar items[0-8] -> slots 36-44, main inventory items[9-35] -> slots 9-35, chest armor -> slot 6.
+        int slotId = (spare < 9) ? spare + 36 : spare;
+        Containers.moveStack(mc.player.inventoryMenu, slotId, 6);
+        info("Swapped broken elytra for a fresh one from inventory.");
+        needMending = false;
+        needElytraSwap = false;
+        to(Phase.RETURN_SUPPLIES);
+    }
+
+    private void waitAndDisconnect() {
+        if (!mc.player.onGround()) return;
+        info("Trip ended; disconnecting from server.");
+        var conn = mc.getConnection();
+        if (conn != null) conn.getConnection().disconnect(
+            net.minecraft.network.chat.Component.literal("ElytraResupply: trip ended"));
+    }
+
+    /** Finds a spare elytra with remaining durability in the main inventory (not armor slot). */
+    private int findSpareElytra() {
+        var inv = mc.player.getInventory();
+        for (int i = 0; i < 36; i++) {
+            ItemStack stack = inv.getItem(i);
+            if (stack.is(Items.ELYTRA) && (stack.getMaxDamage() - stack.getDamageValue()) > 0) return i;
+        }
+        return -1;
     }
 
     private void log(String fmt, Object... args) {
