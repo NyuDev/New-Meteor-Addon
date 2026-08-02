@@ -181,6 +181,8 @@ public class ElytraResupply extends Module {
     private boolean walkingToDrop;
     /** Whether the elytra process was flying last tick, to tell a new trip from a retarget. */
     private boolean elytraWasActive;
+    /** How many of the item we already carried before mining, so a real pickup is detectable. */
+    private int collectBaseline;
 
     private BlockPos chestPos;
     private BlockPos shulkerPos;
@@ -565,11 +567,17 @@ public class ElytraResupply extends Module {
             return;
         }
 
+        // Count what we already carry before mining. Asking merely whether an ender chest is
+        // in the inventory is useless when a spare is being carried - which is the normal
+        // case - because the answer is yes whether or not the dropped one was ever picked up.
+        // That is why collection looked fine while the chest stayed on the ground.
+        if (phaseTicks <= 1) collectBaseline = countMatching(expected);
+
         if (mc.level.getBlockState(pos).isAir()) {
             // Give the item entity a moment to fly into us before declaring anything.
             if (phaseTicks < 20) return;
 
-            if (InvUtils.find(expected).found()) {
+            if (countMatching(expected) > collectBaseline) {
                 if (walkingToDrop) {
                     BaritoneBridge.cancel();
                     walkingToDrop = false;
@@ -739,6 +747,17 @@ public class ElytraResupply extends Module {
         return false;
     }
 
+    /** Total items on the player matching a predicate, counting stack sizes. */
+    private int countMatching(Predicate<ItemStack> match) {
+        var inv = mc.player.getInventory();
+        int total = 0;
+        for (int i = 0; i < inv.getContainerSize(); i++) {
+            ItemStack stack = inv.getItem(i);
+            if (!stack.isEmpty() && match.test(stack)) total += stack.getCount();
+        }
+        return total;
+    }
+
     private int countInventory(Item item) {
         var inv = mc.player.getInventory();
         int total = 0;
@@ -833,6 +852,14 @@ public class ElytraResupply extends Module {
      * had nowhere to go, which is exactly how a run stalled after placing the chest.
      */
     private BlockPos findSpot(boolean forShulker) {
+        // Prefer somewhere ringed by solid ground, so a dropped item cannot roll off an edge
+        // into the void. Fall back to any valid spot rather than refusing to work: on a
+        // narrow ledge a slightly risky placement still beats a stranded flight.
+        BlockPos safe = findSpot(forShulker, true);
+        return safe != null ? safe : findSpot(forShulker, false);
+    }
+
+    private BlockPos findSpot(boolean forShulker, boolean requireSurrounded) {
         BlockPos feet = mc.player.blockPosition();
         BlockPos best = null;
         double bestDist = Double.MAX_VALUE;
@@ -843,6 +870,7 @@ public class ElytraResupply extends Module {
                 for (int dz = -radius; dz <= radius; dz++) {
                     scratch.set(feet.getX() + dx, feet.getY() + dy, feet.getZ() + dz);
                     if (!isUsableSpot(scratch, forShulker)) continue;
+                    if (requireSurrounded && !isRingedByGround(scratch)) continue;
 
                     // Must be close enough to actually click, not just close enough to see.
                     double dist = mc.player.getEyePosition()
@@ -858,6 +886,18 @@ public class ElytraResupply extends Module {
         }
 
         return best;
+    }
+
+    /** True when the floor extends under all eight blocks around the spot, edge included. */
+    private boolean isRingedByGround(BlockPos pos) {
+        BlockPos base = pos.below();
+        for (int dx = -1; dx <= 1; dx++) {
+            for (int dz = -1; dz <= 1; dz++) {
+                BlockState floor = mc.level.getBlockState(base.offset(dx, 0, dz));
+                if (floor.isAir() || !floor.getFluidState().isEmpty()) return false;
+            }
+        }
+        return true;
     }
 
     /**
