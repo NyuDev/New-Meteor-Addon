@@ -27,6 +27,7 @@ already-moss doesn't count) instead of spamming.
 | `delay` | 4 | Ticks between actions. |
 | `pause-on-killaura` | on | Stop while KillAura is active. |
 | `rotate` / `swap-back` / `swing` | on | Interaction behaviour. |
+| `silent-rotations` | on | Face the block without turning your camera; the server sees the same rotation either way. |
 | `auto-refill` | on | Refill hotbar bone meal from inventory. |
 | `auto-disable` | on | Turn off when totally out of bone meal. |
 | `place-moss` | off | Place carried moss next to exposed stone to create work. |
@@ -167,6 +168,9 @@ Silk Touch → pick it up.
 | `action-delay` | 4 | Ticks between actions. Instant clicks look nothing like a player. |
 | `container-settle` | 10 | Ticks to wait after a container opens before reading it. |
 | `auto-takeoff` | on | Jump and open the elytra after resupplying. |
+| `disconnect-when-done` | off | Disconnect once the trip ends, or when it cannot continue. |
+| `release-on-input` | on | Hand control back the instant you press a movement key. |
+| `silent-rotations` | on | Face each block without turning your camera. See below. |
 | `debug` | **on** | Logs every phase transition. Leave it on until you trust it. |
 
 The Silk Touch tool is found **anywhere in your inventory**, pulled into the hotbar when the
@@ -177,6 +181,16 @@ Dyed shulker boxes are matched too — each colour is a separate item, so checki
 
 **Requires Meteor's Baritone fork**, and the elytra must carry **Mending** — XP bottles only
 repair through that enchantment.
+
+#### Playing legit
+
+Every interaction - opening the chest, breaking it, breaking the shulker - faces the block
+first and only acts once that rotation is in flight. Placements pick the face turned toward
+the player rather than always the top. A server that tracks whether your rotation actually
+points at what you click will not see anything else here.
+
+`silent-rotations` decides only whether your own camera turns to match - the server is told
+the same rotation either way, so this is comfort, not the thing that makes it legit.
 
 Every step is a server round trip (a block must appear, a container must open, an item must
 be collected), so this is a state machine with a timeout per phase. On any timeout it runs
