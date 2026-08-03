@@ -94,6 +94,8 @@ public class ElytraResupply extends Module {
     private boolean walkingToDrop;
     /** Whether the elytra process was flying last tick, to tell a new trip from a retarget. */
     private boolean elytraWasActive;
+    /** Paces the idle diagnostic so it explains itself without flooding the log. */
+    private int idleTicks;
     /** How many of the item we already carried before mining, so a real pickup is detectable. */
     private int collectBaseline;
 
@@ -244,30 +246,34 @@ public class ElytraResupply extends Module {
      * up there is nothing left to ask.
      */
     private void watchForLanding() {
-        if (BaritoneBridge.isElytraActive()) {
-            BlockPos dest = BaritoneBridge.elytraDestination();
+        boolean elytraActive = BaritoneBridge.isElytraActive();
 
-            if (dest != null) {
-                if (!elytraWasActive || resumeTarget == null) {
-                    // Start of a flight: whatever it is aiming at now is what was asked for.
-                    resumeTarget = dest;
-                    log("travel goal noted: %s", dest);
-                } else if (!dest.equals(resumeTarget)
-                    && dest.distSqr(mc.player.blockPosition()) > RETARGET_MIN_DIST * RETARGET_MIN_DIST) {
-                    // A genuinely new long-range goal, so honour it. Anything nearby is
-                    // Baritone picking somewhere to set down, and taking that as the trip's
-                    // destination is what made it try to land where it already was.
-                    resumeTarget = dest;
-                    log("travel goal changed: %s", dest);
-                }
-            }
+        // Two independent sources for the destination. Reading it only from the elytra
+        // process meant that when that process reported inactive - which it does on some
+        // builds even mid-glide - nothing was ever captured and the module sat idle in
+        // total silence. Baritone's own goal is the fallback.
+        BlockPos dest = elytraActive ? BaritoneBridge.elytraDestination() : null;
+        if (dest == null) dest = BaritoneBridge.currentGoalPos();
 
+        if (dest != null && isRealTravelGoal(dest) && !dest.equals(resumeTarget)) {
+            // Only long-range goals count. Anything nearby is Baritone picking somewhere to
+            // set down, and taking that for the trip destination is what once made it try to
+            // fly to where it already stood.
+            resumeTarget = dest;
+            log("travel goal noted: %s", dest);
+        }
+
+        // Still airborne, whether or not the process admits to being active.
+        if (elytraActive || !mc.player.onGround()) {
             elytraWasActive = true;
             return;
         }
         elytraWasActive = false;
 
-        if (resumeTarget == null || !mc.player.onGround()) return;
+        if (resumeTarget == null || !mc.player.onGround()) {
+            reportIdle(elytraActive, dest);
+            return;
+        }
 
         boolean lowFireworks = PlayerInv.count(mc, Items.FIREWORK_ROCKET) <= cfg.minFireworks.get();
         boolean equippedDamaged = PlayerInv.wornElytraDurability(mc) < cfg.minElytraDurability.get();
@@ -970,6 +976,26 @@ public class ElytraResupply extends Module {
             return;
         }
         to(Phase.BREAK_CHEST);
+    }
+
+    /** True for a destination far enough off to be the trip, not a landing spot. */
+    private boolean isRealTravelGoal(BlockPos dest) {
+        return dest.distSqr(mc.player.blockPosition())
+            > (double) RETARGET_MIN_DIST * RETARGET_MIN_DIST;
+    }
+
+    /**
+     * Says why nothing is happening, at most once a second.
+     *
+     * <p>Sitting idle used to produce no output whatever, so "it just does nothing" was
+     * impossible to tell apart from a broken Baritone binding, a goal that was never seen, or
+     * simply still being in the air. Each of those now says so.
+     */
+    private void reportIdle(boolean elytraActive, BlockPos seenGoal) {
+        if (!cfg.debug.get() || idleTicks++ % 20 != 0) return;
+
+        log("idle: baritone=%s elytraActive=%s goalSeen=%s resumeTarget=%s onGround=%s",
+            BaritoneBridge.isUsable(), elytraActive, seenGoal, resumeTarget, mc.player.onGround());
     }
 
     private void log(String fmt, Object... args) {

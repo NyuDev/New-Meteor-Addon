@@ -43,6 +43,9 @@ public final class BaritoneBridge {
     private static Method mGetPathingBehavior;
     private static Method mCancelEverything;
     private static Method mIsPathing;
+    private static Method mGetGoal;
+    private static Class<?> goalRenderPosClass;
+    private static Method mGetGoalPos;
     private static Method mGetElytraProcess;
     private static Method mElytraIsActive;
     private static Method mElytraDestination;
@@ -122,6 +125,32 @@ public final class BaritoneBridge {
         } catch (Throwable t) {
             fail("exploreTo failed", t);
             return false;
+        }
+    }
+
+    /**
+     * Where Baritone is headed according to its own goal, or null.
+     *
+     * <p>A second, independent source of the trip destination. The elytra process is not the
+     * only thing that knows where we are going, and relying on it alone meant that when it
+     * reported inactive - as it does on some builds even mid-glide - the destination was
+     * never captured and the whole module sat idle without a word.
+     *
+     * <p>Only goals that carry a concrete position answer; a bare "go this direction" goal
+     * has nothing useful to give.
+     */
+    public static BlockPos currentGoalPos() {
+        if (!isUsable()) return null;
+
+        try {
+            Object baritone = mGetPrimaryBaritone.invoke(provider);
+            Object behavior = mGetPathingBehavior.invoke(baritone);
+            Object goal = mGetGoal.invoke(behavior);
+            if (goal == null || !goalRenderPosClass.isInstance(goal)) return null;
+            return (BlockPos) mGetGoalPos.invoke(goal);
+        } catch (Throwable t) {
+            fail("currentGoalPos failed", t);
+            return null;
         }
     }
 
@@ -228,6 +257,9 @@ public final class BaritoneBridge {
             mGetPathingBehavior = baritoneClass.getMethod("getPathingBehavior");
             mCancelEverything = pathingClass.getMethod("cancelEverything");
             mIsPathing = pathingClass.getMethod("isPathing");
+            mGetGoal = pathingClass.getMethod("getGoal");
+            goalRenderPosClass = Class.forName("baritone.api.utils.interfaces.IGoalRenderPos");
+            mGetGoalPos = goalRenderPosClass.getMethod("getGoalPos");
             mGetElytraProcess = baritoneClass.getMethod("getElytraProcess");
             mElytraIsActive = processClass.getMethod("isActive");
             mElytraDestination = elytraClass.getMethod("currentDestination");
