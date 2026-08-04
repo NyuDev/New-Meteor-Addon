@@ -1,6 +1,7 @@
 package fr.nyuway.newaddon.modules;
 
 import fr.nyuway.newaddon.NewAddon;
+import fr.nyuway.newaddon.utils.WorldBounds;
 import meteordevelopment.meteorclient.events.packets.PacketEvent;
 import meteordevelopment.meteorclient.events.world.TickEvent;
 import meteordevelopment.meteorclient.settings.BoolSetting;
@@ -72,6 +73,31 @@ public class AutoStasisPull extends Module {
         .description("Turn this module off after a pull, so it does not keep firing while you " +
                      "are still hurt.")
         .defaultValue(true)
+        .build());
+
+    private final Setting<Boolean> voidTrigger = sgTriggers.add(new BoolSetting.Builder()
+        .name("void")
+        .description("Pull the instant you are low enough to take void damage. On by default " +
+                     "and checked before every other trigger, because void damage kills " +
+                     "straight through a totem.")
+        .defaultValue(true)
+        .build());
+
+    private final Setting<Boolean> voidAuto = sgTriggers.add(new BoolSetting.Builder()
+        .name("void-y-auto")
+        .description("Work the height out from the dimension instead of using a fixed number. " +
+                     "Vanilla starts void damage 64 below the world floor, which is about " +
+                     "-128 in the Overworld but -64 in the Nether and the End.")
+        .defaultValue(true)
+        .visible(voidTrigger::get)
+        .build());
+
+    private final Setting<Integer> voidY = sgTriggers.add(new IntSetting.Builder()
+        .name("void-y")
+        .description("Height to pull at when the automatic one is off. Set it well above the " +
+                     "damage line to leave the bot time to answer.")
+        .defaultValue(-128).min(-256).max(320).sliderMin(-160).sliderMax(64)
+        .visible(() -> voidTrigger.get() && !voidAuto.get())
         .build());
 
     private final Setting<Boolean> healthTrigger = sgTriggers.add(new BoolSetting.Builder()
@@ -205,6 +231,14 @@ public class AutoStasisPull extends Module {
         if (mc.player == null || mc.level == null) return;
         ticks++;
 
+        // Checked before everything else, and without any of the usual gating. A totem does
+        // not save you from void damage - it kills through them - so there is nothing to
+        // weigh up: either the pull happens now or it does not happen.
+        if (voidTrigger.get() && mc.player.getY() < voidThreshold()) {
+            fire(String.format("in the void at y %.0f", mc.player.getY()));
+            return;
+        }
+
         if (recountAtTick != -1 && ticks >= recountAtTick) {
             recountAtTick = -1;
             int left = countTotems();
@@ -233,6 +267,11 @@ public class AutoStasisPull extends Module {
                 }
             }
         }
+    }
+
+    /** Height at or below which to pull, from the dimension or from the manual setting. */
+    private double voidThreshold() {
+        return voidAuto.get() ? WorldBounds.voidDamageY(mc.level) : voidY.get();
     }
 
     /** Totems anywhere on the player: hotbar, main inventory, armor and offhand slots. */

@@ -84,12 +84,27 @@ is delegated to StasisPull, so whichever transport you set there is what gets us
 | --- | --- | --- |
 | `disable-autolog` | on | Switch Meteor's AutoLog off, so you aren't pulled *and* disconnected. |
 | `toggle-off` | on | Turn off after a pull instead of firing repeatedly. |
+| `void` | on | Pull the instant you are low enough to take void damage. |
+| `void-y-auto` | on | Work the height out from the dimension rather than a fixed number. |
+| `void-y` | -128 | Manual height, used when `void-y-auto` is off. |
 | `health` / `health-level` | on / 8 | Pull at or below this health. |
 | `count-absorption` | on | Count golden-apple absorption as health. |
 | `totem` / `totem-mode` | on / Remaining | `Remaining` checks supply after a pop; `PopsInWindow` counts pops in a time window. |
 | `totem-remaining` | 3 | (`Remaining`) Pull when a pop leaves you with this many totems or fewer. |
 | `totem-window-pops` / `totem-window-seconds` | 3 / 300 | (`PopsInWindow`) This many pops within this many seconds. |
 | `players` / `player-range` | off / 16 | Pull when a non-friend gets this close. |
+
+**The void trigger is checked before every other one and is not gated by anything**, because
+void damage kills straight through a totem — there is nothing to weigh up.
+
+The height is dimension-dependent, not one fixed number: vanilla starts void damage 64 below
+the world floor, so roughly **-128 in the Overworld** (floor -64) but **-64 in the Nether and
+the End** (floor 0). `void-y-auto` works that out for you.
+
+> Firing exactly on the damage line is likely **too late in practice**. A pull is a round trip
+> to your bot while void damage is already ticking. If you want this to actually save you,
+> turn `void-y-auto` off and set `void-y` well above the damage line — around **-40** in the
+> Overworld — so it fires during the fall instead.
 
 Both totem modes require an actual pop (vanilla `ENTITY_EVENT` id 35), never a bare inventory
 scan. `Remaining` recounts your totems (hotbar, storage, armor, offhand) a couple of ticks
