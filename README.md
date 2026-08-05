@@ -28,7 +28,8 @@ already-moss doesn't count) instead of spamming.
 | `rotate` / `swap-back` / `swing` | on | Interaction behaviour. Off places blocks at the angle you are already holding. |
 | `silent-rotations` | on | Face the block without turning your camera; the server sees the same rotation either way. |
 | `auto-refill` | on | Refill hotbar bone meal from inventory. |
-| `pause-while-using` | on | Stop while eating, drinking or with a screen open; a hotbar swap cancels those. |
+| `pause-while-using` | on | Stop while eating or drinking; a hotbar swap cancels those. |
+| `pause-in-gui` | off | Also stop while any screen is open. Crafting waits either way. |
 | `auto-disable` | on | Turn off when totally out of bone meal. |
 | `place-moss` | off | Place carried moss next to stone no existing patch can reach. |
 | `air-place` | off | Allow placing with nothing to click against. Vanilla servers reject it. |

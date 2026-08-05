@@ -228,9 +228,17 @@ public class AutoMoss extends Module {
 
         // After the escape, deliberately: an interrupted meal is an annoyance, suffocating
         // while eating is not.
-        if (cfg.pauseWhileUsing.get() && (mc.player.isUsingItem() || mc.screen != null)) {
+        if (cfg.pauseWhileUsing.get() && mc.player.isUsingItem()) {
             mossTarget = clearTarget = azaleaTarget = placeTarget = null;
-            if (debugDue()) log("paused: you are using an item or have a screen open");
+            if (debugDue()) log("paused: you are using an item");
+            return;
+        }
+
+        // Separate from the above on purpose: a swap ruining your meal and a screen being up
+        // are different situations, and only the first is always worth stopping for.
+        if (cfg.pauseInGui.get() && mc.screen != null) {
+            mossTarget = clearTarget = azaleaTarget = placeTarget = null;
+            if (debugDue()) log("paused: a screen is open");
             return;
         }
 

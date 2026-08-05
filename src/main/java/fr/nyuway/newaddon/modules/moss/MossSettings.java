@@ -41,6 +41,7 @@ public final class MossSettings {
     public final Setting<Boolean> escapeStuck;
     public final Setting<Boolean> pauseWhileStuck;
     public final Setting<Boolean> pauseWhileUsing;
+    public final Setting<Boolean> pauseInGui;
     public final Setting<Boolean> craftBoneMeal;
     public final Setting<Integer> craftBelow;
     public final Setting<Boolean> craftFromBones;
@@ -216,9 +217,17 @@ public final class MossSettings {
         pauseWhileUsing = sgGeneral.add(new BoolSetting.Builder()
             .name("pause-while-using")
             .description("Stop while you are eating, drinking or otherwise holding an item in " +
-                         "use, and while any screen is open. Bone mealing swaps your hotbar " +
-                         "slot, and a swap cancels whatever you were in the middle of.")
+                         "use. Bone mealing swaps your hotbar slot, and a swap cancels whatever " +
+                         "you were in the middle of.")
             .defaultValue(true)
+            .build());
+
+        pauseInGui = sgGeneral.add(new BoolSetting.Builder()
+            .name("pause-in-gui")
+            .description("Also stop whenever a screen is open. Off, opening your inventory or a " +
+                         "chest does not interrupt the work. Crafting is the exception and waits " +
+                         "either way: it drives the same slots you would be clicking.")
+            .defaultValue(false)
             .build());
 
         range = sgReach.add(new DoubleSetting.Builder()
