@@ -6,6 +6,8 @@ import fr.nyuway.newaddon.modules.moss.MossSettings;
 import fr.nyuway.newaddon.utils.Combat;
 import fr.nyuway.newaddon.utils.Interactions;
 import fr.nyuway.newaddon.utils.OffsetTable;
+import fr.nyuway.newaddon.utils.Reach;
+import fr.nyuway.newaddon.utils.Unstuck;
 import fr.nyuway.newaddon.compat.BaritoneBridge;
 import meteordevelopment.meteorclient.events.render.Render3DEvent;
 import meteordevelopment.meteorclient.events.world.TickEvent;
@@ -166,6 +168,8 @@ public class AutoMoss extends Module {
                 cfg.range.get(), cfg.patchRadius.get(), cfg.minConversions.get(),
                 cfg.convertDirt.get(), cfg.clearObstructions.get(), cfg.placeMoss.get(),
                 cfg.airPlace.get(), cfg.baritone.get());
+            log("enabled: vanillaReach=%s breakPlaceReach=%.1f escapeStuck=%s",
+                cfg.vanillaReach.get(), cfg.breakPlaceReach.get(), cfg.escapeStuck.get());
             log("enabled: boneMealHotbar=%d boneMealTotal=%d mossHotbar=%d",
                 InvUtils.findInHotbar(Items.BONE_MEAL).count(),
                 InvUtils.find(Items.BONE_MEAL).count(),
@@ -197,6 +201,11 @@ public class AutoMoss extends Module {
         if (cfg.pauseOnKillAura.get() && Combat.killAuraFighting()) {
             mossTarget = clearTarget = azaleaTarget = placeTarget = null;
             if (debugDue()) log("paused: KillAura is fighting");
+            return;
+        }
+
+        if (handleStuck()) {
+            mossTarget = clearTarget = azaleaTarget = placeTarget = null;
             return;
         }
 
@@ -386,7 +395,9 @@ public class AutoMoss extends Module {
                     // something. Neighbouring columns read the same either way, so the
                     // count is a valid prediction of the post-break result.
                     seenMossObstructed++;
-                    if (clearTarget == null && patch().countConversions(x, y + 1, z, needed) >= needed) {
+                    scanPos.set(x, y + 1, z);
+                    if (clearTarget == null && canTouch(scanPos)
+                        && patch().countConversions(x, y + 1, z, needed) >= needed) {
                         clearTarget = notBlacklisted(x, y + 1, z);
                     }
                 }
@@ -408,6 +419,7 @@ public class AutoMoss extends Module {
 
                 scanPos.set(x, y, z);
                 if (!BlockUtils.canPlace(scanPos)) continue;
+                if (!canTouch(scanPos)) continue;
 
                 // Something solid to click against. The block below already passed, but it can
                 // be a fluid or a container, neither of which a placement can be aimed at.
@@ -725,6 +737,35 @@ public class AutoMoss extends Module {
         }
 
         return patch().countConversions(x, y + 1, z, Integer.MAX_VALUE);
+    }
+
+    /** Whether a break or a place at this position is within the configured reach. */
+    private boolean canTouch(BlockPos pos) {
+        return Reach.canReach(mc, pos, cfg.vanillaReach.get(), cfg.breakPlaceReach.get());
+    }
+
+    /**
+     * Digs out of a block that has closed around the player.
+     *
+     * <p>Runs before the bone meal check on purpose: being walled in is worth escaping whether
+     * or not there is anything left to work with, and the module going idle for lack of bone
+     * meal is no reason to sit there taking suffocation damage.
+     *
+     * @return true when this took the tick
+     */
+    private boolean handleStuck() {
+        if (!cfg.escapeStuck.get()) return false;
+
+        BlockPos trap = Unstuck.find(mc, auxPos);
+        if (trap == null) return false;
+
+        if (debugDue()) log("stuck: breaking %s to get free", trap);
+
+        // Reach is not consulted here - the block is inside us, so no limit can exclude it,
+        // and refusing to dig out on a technicality would be the worst possible reading.
+        Interactions.mine(mc, trap, cfg.silentRotations.get(), cfg.swing.get());
+
+        return cfg.pauseWhileStuck.get();
     }
 
     private void useBonemeal(BlockPos pos, Block expected) {

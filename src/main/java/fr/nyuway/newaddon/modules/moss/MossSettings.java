@@ -36,6 +36,10 @@ public final class MossSettings {
     public final Setting<Boolean> swing;
     public final Setting<Boolean> placeMoss;
     public final Setting<Boolean> airPlace;
+    public final Setting<Boolean> vanillaReach;
+    public final Setting<Double> breakPlaceReach;
+    public final Setting<Boolean> escapeStuck;
+    public final Setting<Boolean> pauseWhileStuck;
     public final Setting<Boolean> clearObstructions;
     public final Setting<Boolean> growAzalea;
     public final Setting<Integer> azaleaInterval;
@@ -58,6 +62,8 @@ public final class MossSettings {
 
     public MossSettings(Settings settings) {
         SettingGroup sgGeneral = settings.getDefaultGroup();
+        SettingGroup sgReach = settings.createGroup("Reach");
+        SettingGroup sgSafety = settings.createGroup("Safety");
         SettingGroup sgClear = settings.createGroup("Obstructions");
         SettingGroup sgAzalea = settings.createGroup("Azalea");
         SettingGroup sgBaritone = settings.createGroup("Baritone");
@@ -162,6 +168,39 @@ public final class MossSettings {
                          "not there; leave it off unless you know yours accepts it.")
             .defaultValue(false)
             .visible(placeMoss::get)
+            .build());
+
+        vanillaReach = sgReach.add(new BoolSetting.Builder()
+            .name("vanilla-reach")
+            .description("Only break or place within the range the client itself allows. Bone " +
+                         "mealing is not affected: it passes at distances a break or a place " +
+                         "does not, which is why this limit is separate from range.")
+            .defaultValue(true)
+            .build());
+
+        breakPlaceReach = sgReach.add(new DoubleSetting.Builder()
+            .name("break-place-reach")
+            .description("Your own limit for breaking and placing, measured from your eyes to " +
+                         "the nearest point of the block. Lower it on a server whose anticheat " +
+                         "is stricter than vanilla.")
+            .defaultValue(3.5).min(1.0).max(6.0).sliderRange(1.0, 6.0)
+            .visible(() -> !vanillaReach.get())
+            .build());
+
+        escapeStuck = sgSafety.add(new BoolSetting.Builder()
+            .name("escape-stuck")
+            .description("Break out when a block closes around you. Growing an azalea into a " +
+                         "tree can put a log where you stand: through your head it suffocates " +
+                         "you, through your feet it leaves Baritone unable to move.")
+            .defaultValue(true)
+            .build());
+
+        pauseWhileStuck = sgSafety.add(new BoolSetting.Builder()
+            .name("pause-while-stuck")
+            .description("Do nothing else until you are free. Off, digging out competes with " +
+                         "bone mealing for the same tick.")
+            .defaultValue(true)
+            .visible(escapeStuck::get)
             .build());
 
         clearObstructions = sgClear.add(new BoolSetting.Builder()

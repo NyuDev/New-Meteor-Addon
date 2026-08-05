@@ -32,6 +32,10 @@ already-moss doesn't count) instead of spamming.
 | `auto-disable` | on | Turn off when totally out of bone meal. |
 | `place-moss` | off | Place carried moss next to exposed stone to create work. |
 | `air-place` | off | Allow placing with nothing to click against. Vanilla servers reject it. |
+| `vanilla-reach` | on | Limit breaking and placing to the range the client allows. Bone mealing is unaffected. |
+| `break-place-reach` | 3.5 | Your own limit, eyes to nearest point of the block. Shown when `vanilla-reach` is off. |
+| `escape-stuck` | on | Break out when a block closes around you, head first. |
+| `pause-while-stuck` | on | Do nothing else until free. |
 | `render` / `shape-mode` / colors | on | Target highlight. |
 | `debug` / `debug-interval` | on | Log scan counters to diagnose an idle module. |
 
