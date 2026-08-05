@@ -3,6 +3,7 @@ package fr.nyuway.newaddon.modules;
 import fr.nyuway.newaddon.NewAddon;
 import fr.nyuway.newaddon.compat.BaritoneBridge;
 import fr.nyuway.newaddon.modules.elytra.ResupplySettings;
+import fr.nyuway.newaddon.utils.Combat;
 import fr.nyuway.newaddon.utils.Containers;
 import fr.nyuway.newaddon.utils.Enchants;
 import fr.nyuway.newaddon.utils.Interactions;
@@ -12,8 +13,6 @@ import fr.nyuway.newaddon.utils.SpotFinder;
 import meteordevelopment.meteorclient.events.world.TickEvent;
 import meteordevelopment.meteorclient.settings.Setting;
 import meteordevelopment.meteorclient.systems.modules.Module;
-import meteordevelopment.meteorclient.systems.modules.Modules;
-import meteordevelopment.meteorclient.systems.modules.combat.KillAura;
 import meteordevelopment.meteorclient.utils.player.FindItemResult;
 import meteordevelopment.meteorclient.utils.player.InvUtils;
 import meteordevelopment.meteorclient.utils.player.Rotations;
@@ -96,6 +95,8 @@ public class ElytraResupply extends Module {
     private boolean elytraWasActive;
     /** Paces the idle diagnostic so it explains itself without flooding the log. */
     private int idleTicks;
+    /** Paces the combat-pause diagnostic the same way. */
+    private int pauseTicks;
     /** How many of the item we already carried before mining, so a real pickup is detectable. */
     private int collectBaseline;
 
@@ -191,8 +192,9 @@ public class ElytraResupply extends Module {
 
         // Freeze rather than reset: phaseTicks is not advanced either, so a long fight does
         // not trip the phase timeout and throw away a run that was going fine.
-        if (cfg.pauseOnKillAura.get() && Modules.get().isActive(KillAura.class)) {
+        if (cfg.pauseOnKillAura.get() && Combat.killAuraFighting()) {
             if (isContainerOpen()) mc.player.closeContainer();
+            if (cfg.debug.get() && pauseTicks++ % 20 == 0) log("paused: KillAura is fighting");
             return;
         }
 

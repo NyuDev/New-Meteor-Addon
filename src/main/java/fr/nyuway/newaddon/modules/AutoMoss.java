@@ -3,14 +3,13 @@ package fr.nyuway.newaddon.modules;
 import fr.nyuway.newaddon.NewAddon;
 import fr.nyuway.newaddon.modules.moss.MossPatch;
 import fr.nyuway.newaddon.modules.moss.MossSettings;
+import fr.nyuway.newaddon.utils.Combat;
 import fr.nyuway.newaddon.utils.Interactions;
 import fr.nyuway.newaddon.utils.OffsetTable;
 import fr.nyuway.newaddon.compat.BaritoneBridge;
 import meteordevelopment.meteorclient.events.render.Render3DEvent;
 import meteordevelopment.meteorclient.events.world.TickEvent;
 import meteordevelopment.meteorclient.systems.modules.Module;
-import meteordevelopment.meteorclient.systems.modules.Modules;
-import meteordevelopment.meteorclient.systems.modules.combat.KillAura;
 import meteordevelopment.meteorclient.utils.player.FindItemResult;
 import meteordevelopment.meteorclient.utils.player.InvUtils;
 import meteordevelopment.meteorclient.utils.player.Rotations;
@@ -89,6 +88,12 @@ public class AutoMoss extends Module {
     private final MossSettings cfg = new MossSettings(settings);
 
     private final OffsetTable offsets = new OffsetTable();
+
+    /** Conversion predictor, rebuilt only when its inputs change. See {@link #patch()}. */
+    private MossPatch patch;
+    private int patchRadius = -1;
+    private boolean patchStoneOnly;
+    private net.minecraft.world.level.Level patchLevel;
     /** Reused across the whole scan so a tick allocates nothing. */
     private final BlockPos.MutableBlockPos scanPos = new BlockPos.MutableBlockPos();
     private final BlockPos.MutableBlockPos auxPos = new BlockPos.MutableBlockPos();
@@ -154,6 +159,18 @@ public class AutoMoss extends Module {
         if (cfg.baritone.get() && !BaritoneBridge.isPresent()) {
             warning("Baritone control needs Meteor's Baritone fork, which is not installed.");
         }
+
+        if (cfg.debug.get() && mc.player != null) {
+            log("enabled: range=%.1f patchRadius=%d minConversions=%d stoneOnly=%s "
+                + "clearObstructions=%s placeMoss=%s baritone=%s",
+                cfg.range.get(), cfg.patchRadius.get(), cfg.minConversions.get(),
+                cfg.stoneOnly.get(), cfg.clearObstructions.get(), cfg.placeMoss.get(),
+                cfg.baritone.get());
+            log("enabled: boneMealHotbar=%d boneMealTotal=%d mossHotbar=%d",
+                InvUtils.findInHotbar(Items.BONE_MEAL).count(),
+                InvUtils.find(Items.BONE_MEAL).count(),
+                InvUtils.findInHotbar(Items.MOSS_BLOCK).count());
+        }
     }
 
     @Override
@@ -175,12 +192,13 @@ public class AutoMoss extends Module {
     private void onTick(TickEvent.Pre event) {
         if (mc.player == null || mc.level == null) return;
 
-        if (cfg.pauseOnKillAura.get() && Modules.get().isActive(KillAura.class)) {
+        ticks++;
+
+        if (cfg.pauseOnKillAura.get() && Combat.killAuraFighting()) {
             mossTarget = clearTarget = azaleaTarget = placeTarget = null;
+            if (debugDue()) log("paused: KillAura is fighting");
             return;
         }
-
-        ticks++;
 
         boolean ready = timer <= 0;
         if (!ready) timer--;
@@ -220,9 +238,28 @@ public class AutoMoss extends Module {
         scan(azaleaDue, hasMoss);
 
         if (debugDue()) {
-            log("moss=%d withAir=%d obstructed=%d tooPoor=%d | target=%s clear=%s place=%s azalea=%s",
-                seenMoss, seenMossWithAir, seenMossObstructed, seenMossTooPoor,
+            log("scan: moss=%d withAir=%d obstructed=%d tooPoor=%d blacklisted=%d "
+                + "| target=%s clear=%s place=%s azalea=%s",
+                seenMoss, seenMossWithAir, seenMossObstructed, seenMossTooPoor, blacklist.size(),
                 mossTarget, clearTarget, placeTarget, azaleaTarget);
+
+            // Say what the numbers mean, so an idle module never needs interpreting.
+            if (seenMoss == 0) {
+                log("  -> no moss within range %.1f; nothing to work with here",
+                    cfg.range.get());
+            } else if (seenMossWithAir == 0 && seenMossObstructed == 0) {
+                log("  -> all %d moss blocks are covered by something that cannot be cleared",
+                    seenMoss);
+            } else if (seenMossWithAir > 0 && seenMossTooPoor == seenMossWithAir) {
+                log("  -> %d moss blocks are usable but none has %d convertible column(s) "
+                    + "nearby (patch-radius=%d stone-only=%s); everything around them is "
+                    + "already moss or buried",
+                    seenMossWithAir, cfg.minConversions.get(), cfg.patchRadius.get(),
+                    cfg.stoneOnly.get());
+            } else if (seenMossObstructed > 0 && clearTarget == null && mossTarget == null) {
+                log("  -> %d covered moss blocks, but uncovering none of them would convert "
+                    + "anything", seenMossObstructed);
+            }
         }
 
         // Finishing everything in reach is the event that should hand Baritone its next
@@ -239,24 +276,28 @@ public class AutoMoss extends Module {
         if (azaleaDue && azaleaTarget != null && keepTrying(azaleaTarget)) {
             azaleaTimer = cfg.azaleaInterval.get() * 20;
             timer = cfg.delay.get();
+            if (cfg.debug.get()) log("action: bone mealing azalea at %s", azaleaTarget);
             useBonemeal(azaleaTarget, azaleaBlock);
             return;
         }
 
         if (mossTarget != null && keepTrying(mossTarget)) {
             timer = cfg.delay.get();
+            if (cfg.debug.get()) log("action: bone mealing moss at %s", mossTarget);
             useBonemeal(mossTarget, Blocks.MOSS_BLOCK);
             return;
         }
 
         if (clearTarget != null && keepTrying(clearTarget)) {
             timer = cfg.delay.get();
+            if (cfg.debug.get()) log("action: clearing cover at %s", clearTarget);
             clearBlock(clearTarget);
             return;
         }
 
         if (placeTarget != null && hasMoss && keepTrying(placeTarget)) {
             timer = cfg.delay.get();
+            if (cfg.debug.get()) log("action: placing moss at %s", placeTarget);
             BlockUtils.place(placeTarget, moss, true, 50);
         }
     }
@@ -375,7 +416,21 @@ public class AutoMoss extends Module {
      * the user had already turned off.
      */
     private MossPatch patch() {
-        return new MossPatch(mc.level, cfg.patchRadius.get(), cfg.stoneOnly.get());
+        int radius = cfg.patchRadius.get();
+        boolean stoneOnly = cfg.stoneOnly.get();
+
+        // Cached, but thrown away the moment the settings or the world change. Rebuilding it
+        // per call was allocating one predictor - and its cursor - for every candidate block
+        // in a scan that walks over a thousand offsets, in a module written specifically to
+        // allocate nothing per tick.
+        if (patch == null || radius != patchRadius || stoneOnly != patchStoneOnly
+            || patchLevel != mc.level) {
+            patch = new MossPatch(mc.level, radius, stoneOnly);
+            patchRadius = radius;
+            patchStoneOnly = stoneOnly;
+            patchLevel = mc.level;
+        }
+        return patch;
     }
 
     /** Returns the position, or null when it is on the give-up list. */

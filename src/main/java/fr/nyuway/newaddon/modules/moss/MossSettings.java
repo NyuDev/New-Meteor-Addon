@@ -99,8 +99,9 @@ public final class MossSettings {
 
         pauseOnKillAura = sgGeneral.add(new BoolSetting.Builder()
             .name("pause-on-killaura")
-            .description("Stop entirely while KillAura is active, so hotbar swaps and rotations " +
-                         "never fight with combat.")
+            .description("Stop while KillAura is actually fighting something, so hotbar swaps and " +
+                         "rotations never fight with combat. Merely having KillAura switched on " +
+                         "does not pause anything.")
             .defaultValue(true)
             .build());
 
@@ -283,9 +284,10 @@ public final class MossSettings {
 
         debug = sgDebug.add(new BoolSetting.Builder()
             .name("debug")
-            .description("Log what the scan is finding to the game log. Use this when the module " +
-                         "looks idle: it says whether moss was seen at all, and why it was skipped.")
-            .defaultValue(false)
+            .description("Log what the scan is finding to the game log. On by default: when this " +
+                         "module looks idle the log is the only thing that can say whether moss " +
+                         "was seen at all, and which check rejected it.")
+            .defaultValue(true)
             .build());
 
         debugInterval = sgDebug.add(new IntSetting.Builder()
