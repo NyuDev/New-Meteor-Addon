@@ -40,6 +40,11 @@ public final class MossSettings {
     public final Setting<Double> breakPlaceReach;
     public final Setting<Boolean> escapeStuck;
     public final Setting<Boolean> pauseWhileStuck;
+    public final Setting<Boolean> pauseWhileUsing;
+    public final Setting<Boolean> craftBoneMeal;
+    public final Setting<Integer> craftBelow;
+    public final Setting<Integer> craftBatch;
+    public final Setting<Integer> craftDelay;
     public final Setting<Boolean> clearObstructions;
     public final Setting<Boolean> growAzalea;
     public final Setting<Integer> azaleaInterval;
@@ -62,6 +67,7 @@ public final class MossSettings {
 
     public MossSettings(Settings settings) {
         SettingGroup sgGeneral = settings.getDefaultGroup();
+        SettingGroup sgCraft = settings.createGroup("Crafting");
         SettingGroup sgReach = settings.createGroup("Reach");
         SettingGroup sgSafety = settings.createGroup("Safety");
         SettingGroup sgClear = settings.createGroup("Obstructions");
@@ -140,6 +146,37 @@ public final class MossSettings {
             .defaultValue(true)
             .build());
 
+        craftBoneMeal = sgCraft.add(new BoolSetting.Builder()
+            .name("craft-bone-meal")
+            .description("Craft bone blocks in your inventory into bone meal, in the 2x2 grid, " +
+                         "without opening anything.")
+            .defaultValue(false)
+            .build());
+
+        craftBelow = sgCraft.add(new IntSetting.Builder()
+            .name("craft-below")
+            .description("Only craft while you hold less bone meal than this. A stack keeps you " +
+                         "working without turning your inventory into bone meal.")
+            .defaultValue(64).min(9).max(576).sliderRange(9, 320)
+            .visible(craftBoneMeal::get)
+            .build());
+
+        craftBatch = sgCraft.add(new IntSetting.Builder()
+            .name("craft-batch")
+            .description("Bone blocks per round, each worth 9 bone meal. Capped at 7 so one " +
+                         "round never exceeds a single stack on the cursor.")
+            .defaultValue(3).min(1).max(7).sliderRange(1, 7)
+            .visible(craftBoneMeal::get)
+            .build());
+
+        craftDelay = sgCraft.add(new IntSetting.Builder()
+            .name("craft-delay")
+            .description("Ticks between rounds. Crafting is inventory packets, so spacing the " +
+                         "rounds out is what keeps this quiet.")
+            .defaultValue(20).min(5).max(200).sliderRange(5, 100)
+            .visible(craftBoneMeal::get)
+            .build());
+
         autoDisable = sgGeneral.add(new BoolSetting.Builder()
             .name("auto-disable")
             .description("Turn the module off once there is no bone meal left anywhere in your " +
@@ -168,6 +205,14 @@ public final class MossSettings {
                          "not there; leave it off unless you know yours accepts it.")
             .defaultValue(false)
             .visible(placeMoss::get)
+            .build());
+
+        pauseWhileUsing = sgGeneral.add(new BoolSetting.Builder()
+            .name("pause-while-using")
+            .description("Stop while you are eating, drinking or otherwise holding an item in " +
+                         "use, and while any screen is open. Bone mealing swaps your hotbar " +
+                         "slot, and a swap cancels whatever you were in the middle of.")
+            .defaultValue(true)
             .build());
 
         vanillaReach = sgReach.add(new BoolSetting.Builder()

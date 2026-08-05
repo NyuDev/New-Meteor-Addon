@@ -29,6 +29,7 @@ already-moss doesn't count) instead of spamming.
 | `rotate` / `swap-back` / `swing` | on | Interaction behaviour. Off places blocks at the angle you are already holding. |
 | `silent-rotations` | on | Face the block without turning your camera; the server sees the same rotation either way. |
 | `auto-refill` | on | Refill hotbar bone meal from inventory. |
+| `pause-while-using` | on | Stop while eating, drinking or with a screen open; a hotbar swap cancels those. |
 | `auto-disable` | on | Turn off when totally out of bone meal. |
 | `place-moss` | off | Place carried moss next to exposed stone to create work. |
 | `air-place` | off | Allow placing with nothing to click against. Vanilla servers reject it. |
@@ -36,6 +37,8 @@ already-moss doesn't count) instead of spamming.
 | `break-place-reach` | 3.5 | Your own limit, eyes to nearest point of the block. Shown when `vanilla-reach` is off. |
 | `escape-stuck` | on | Break out when a block closes around you, head first. |
 | `pause-while-stuck` | on | Do nothing else until free. |
+| `craft-bone-meal` | off | Craft bone blocks into bone meal in the 2x2 grid, nothing opened. |
+| `craft-below` / `craft-batch` / `craft-delay` | 64 / 3 / 20 | Craft under this much bone meal, this many blocks per round, this many ticks apart. |
 | `render` / `shape-mode` / colors | on | Target highlight. |
 | `debug` / `debug-interval` | on | Log scan counters to diagnose an idle module. |
 

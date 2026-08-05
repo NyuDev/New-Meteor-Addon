@@ -3,6 +3,7 @@ package fr.nyuway.newaddon.modules;
 import fr.nyuway.newaddon.NewAddon;
 import fr.nyuway.newaddon.modules.moss.MossPatch;
 import fr.nyuway.newaddon.modules.moss.MossSettings;
+import fr.nyuway.newaddon.utils.BoneCrafter;
 import fr.nyuway.newaddon.utils.Combat;
 import fr.nyuway.newaddon.utils.Interactions;
 import fr.nyuway.newaddon.utils.OffsetTable;
@@ -15,6 +16,7 @@ import meteordevelopment.meteorclient.systems.modules.Module;
 import meteordevelopment.meteorclient.utils.player.FindItemResult;
 import meteordevelopment.meteorclient.utils.player.InvUtils;
 import meteordevelopment.meteorclient.utils.player.Rotations;
+import meteordevelopment.meteorclient.utils.player.SlotUtils;
 import meteordevelopment.meteorclient.utils.world.BlockUtils;
 import meteordevelopment.orbit.EventHandler;
 import net.minecraft.core.BlockPos;
@@ -124,6 +126,7 @@ public class AutoMoss extends Module {
     private int timer;
     private int azaleaTimer;
     private int walkTimer;
+    private int craftTimer;
     private int ticks;
 
     // Scan counters, only meaningful when debug is on (the scan runs in full then).
@@ -150,6 +153,7 @@ public class AutoMoss extends Module {
         timer = 0;
         azaleaTimer = 0;
         walkTimer = 0;
+        craftTimer = 0;
         ticks = 0;
         offsets.invalidate();
 
@@ -208,6 +212,17 @@ public class AutoMoss extends Module {
             mossTarget = clearTarget = azaleaTarget = placeTarget = null;
             return;
         }
+
+        // After the escape, deliberately: an interrupted meal is an annoyance, suffocating
+        // while eating is not.
+        if (cfg.pauseWhileUsing.get() && (mc.player.isUsingItem() || mc.screen != null)) {
+            mossTarget = clearTarget = azaleaTarget = placeTarget = null;
+            if (debugDue()) log("paused: you are using an item or have a screen open");
+            return;
+        }
+
+        if (craftTimer > 0) craftTimer--;
+        else if (maybeCraft()) return;
 
         boolean ready = timer <= 0;
         if (!ready) timer--;
@@ -518,6 +533,47 @@ public class AutoMoss extends Module {
      *
      * @return true when a move was issued, so the caller can let it land before acting
      */
+    /**
+     * Tops the bone meal back up from bone blocks.
+     *
+     * <p>Runs before the hotbar check rather than after it: crafting once you are already at
+     * zero means a visible stall every time, and the module may well have disabled itself by
+     * then. Keeping a margin means you never notice.
+     *
+     * @return true when a round happened and the tick is spent
+     */
+    private boolean maybeCraft() {
+        if (!cfg.craftBoneMeal.get()) return false;
+        if (InvUtils.find(Items.BONE_MEAL).count() >= cfg.craftBelow.get()) return false;
+
+        FindItemResult blocks = InvUtils.find(Items.BONE_BLOCK);
+        if (!blocks.found() || !BoneCrafter.ready(mc)) return false;
+
+        int free = firstEmptySlot();
+        if (free == -1) {
+            if (debugDue()) log("craft: no free slot to put the bone meal in");
+            return false;
+        }
+
+        int made = BoneCrafter.craft(mc, SlotUtils.indexToId(blocks.slot()),
+            SlotUtils.indexToId(free), cfg.craftBatch.get());
+
+        craftTimer = cfg.craftDelay.get();
+
+        if (made > 0 && cfg.debug.get()) {
+            log("craft: %d bone block(s) -> %d bone meal", made, made * BoneCrafter.PER_BLOCK);
+        }
+        return made > 0;
+    }
+
+    /** First empty slot in the hotbar or main inventory, or -1. */
+    private int firstEmptySlot() {
+        for (int i = 0; i <= SlotUtils.MAIN_END; i++) {
+            if (mc.player.getInventory().getItem(i).isEmpty()) return i;
+        }
+        return -1;
+    }
+
     private boolean refillHotbar() {
         FindItemResult stack = InvUtils.find(Items.BONE_MEAL);
         if (!stack.found() || stack.isHotbar()) return false;
