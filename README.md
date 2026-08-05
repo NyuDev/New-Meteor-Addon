@@ -39,6 +39,7 @@ already-moss doesn't count) instead of spamming.
 | `pause-while-stuck` | on | Do nothing else until free. |
 | `craft-bone-meal` | off | Craft bone blocks into bone meal in the 2x2 grid, nothing opened. |
 | `craft-below` / `craft-delay` | 64 / 20 | Craft while under this much bone meal, this many ticks apart. |
+| `craft-from-bones` | on | Also use plain bones, three bone meal each. |
 | `2b2t-safe` | on | Empty the grid after every craft, so a death never drops what is in it. |
 | `render` / `shape-mode` / colors | on | Target highlight. |
 | `debug` / `debug-interval` | on | Log scan counters to diagnose an idle module. |

@@ -3,34 +3,42 @@ package fr.nyuway.newaddon.utils;
 import meteordevelopment.meteorclient.utils.player.InvUtils;
 import net.minecraft.client.Minecraft;
 import net.minecraft.world.inventory.AbstractContainerMenu;
+import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 
 import java.util.function.Consumer;
 
 /**
- * Turns bone blocks into bone meal in the 2x2 grid, one click per tick.
+ * Crafts bone meal in the 2x2 grid, one click at a time, never touching a hotbar slot.
  *
- * <h2>Why one click per tick</h2>
- * Every click carries the menu's {@code stateId}. The server compares it against its own and,
- * when they differ, answers with {@code broadcastFullState} - a full resync that throws away
- * whatever the client had predicted. Its own state advances the moment it handles a click, so
- * a second click sent in the same tick still carries the stale id and buys a resync. Taking a
- * craft result advances it twice, because refilling the result slot is itself a change.
+ * <h2>Why hotbar slots are poison here</h2>
+ * {@code ClientPacketListener#handleContainerSetSlot} special-cases container 0 hotbar slots:
+ * instead of {@code menu.setItem(slot, stateId, stack)} it takes a path that updates neither
+ * the visible slot the normal way nor the menu's {@code stateId}. So a correction the server
+ * sends for a hotbar slot never really lands, the client keeps believing whatever it predicted,
+ * and its {@code stateId} stays stale forever - which makes every later click mismatch.
  *
- * <p>That is what a burst of clicks in one tick looks like from the server: a client whose
- * predictions keep having to be corrected. Sending one click per tick, each after seeing the
- * effect of the last, is both what a player does and what stays in step with the server.
+ * <p>That is a client showing a bone block stack that has not moved in a hundred crafts while
+ * the server has been quietly disagreeing the whole time. Everything here therefore works in
+ * the main inventory, slots 9 to 35, where corrections arrive properly; ingredients sitting in
+ * the hotbar are stowed there first.
  *
- * <p>{@code InvUtils.move} is therefore unusable here - it is two clicks, sometimes three, in a
- * single call. Every step below is a single {@code click}.
+ * <h2>Why every step waits for the server</h2>
+ * A click is applied to the client's own menu immediately, so reading that menu back tells you
+ * what you predicted, not what happened. The honest acknowledgement is {@code stateId}: the
+ * server bumps it on every change it broadcasts, and the client adopts the new value from the
+ * packet. Waiting for it to move is waiting for the server to have spoken.
  *
- * <h2>Why each step is confirmed</h2>
- * {@code CraftingMenu#slotChangedCraftingGrid} is guarded by {@code !level.isClientSide}: the
- * client never works out what a grid produces, so the result slot is only ever filled by the
- * server. Reading it in the tick you loaded the grid always finds it empty. Beyond that slot,
- * checking the outcome of a click on the following tick is the only way to tell a click that
- * worked from one the server quietly undid - the difference this class exists to respect.
+ * <p>It matters twice over, because a click sent while the id is stale is answered with
+ * {@code broadcastFullState} - a resync that discards the prediction. Pacing by round trip
+ * rather than by tick count is what keeps the two in step.
+ *
+ * <p>{@code InvUtils.move} is unusable here: it is two clicks, sometimes three, in one call.
+ *
+ * <h2>Why the result slot needs a round trip of its own</h2>
+ * {@code CraftingMenu#slotChangedCraftingGrid} is guarded by {@code !level.isClientSide}. The
+ * client never works out what a grid produces; that slot is only ever filled by the server.
  */
 public final class BoneCrafter {
 
@@ -39,200 +47,213 @@ public final class BoneCrafter {
     private static final int GRID_FIRST = 1;
     private static final int GRID_LAST = 4;
 
-    /** Bone meal a single bone block yields. */
-    public static final int PER_BLOCK = 9;
+    /** Container slot ids of the main inventory - the ones the server can correct. */
+    public static final int MAIN_FIRST = 9;
+    public static final int MAIN_LAST = 35;
 
-    /** Ticks a step may go unconfirmed before the attempt is written off. */
-    private static final int STEP_TIMEOUT = 60;
+    /** Most bone meal one craft can yield, used when checking a destination has room. */
+    public static final int MAX_YIELD = 9;
 
-    private enum Step {
-        /** Nothing in flight. */
-        IDLE,
-        /** Clicked the bone blocks; waiting to see them on the cursor. */
-        GRAB,
-        /** Clicked the grid; waiting to see them land there. */
-        PLACE,
-        /** Grid loaded; waiting for the server to send a result. */
-        WAIT,
-        /** Clicked the result; waiting to see bone meal on the cursor. */
-        TAKE,
-        /** Clicked the destination; waiting to see the cursor empty. */
-        STORE,
-        /** Emptying the grid back into the inventory. */
-        UNLOAD
-    }
+    /** Ticks to wait for the server to answer a click before giving up on it. */
+    private static final int ACK_TIMEOUT = 100;
+
+    private enum Step { IDLE, STOW, GRAB, PLACE, WAIT, TAKE, STORE, UNLOAD }
 
     private final Consumer<String> debug;
 
     private Step step = Step.IDLE;
     private int waited;
-    private int crafts;
+
+    /** Menu state when the pending click went out; the server moves it when it answers. */
+    private int sentAt = -1;
+    private boolean pending;
+
+    private Item ingredient = Items.BONE_BLOCK;
 
     public BoneCrafter(Consumer<String> debug) {
         this.debug = debug;
     }
 
-    /** True while something is in flight and the sequence must keep being ticked. */
     public boolean isBusy() {
         return step != Step.IDLE;
     }
 
-    /**
-     * Whether the grid can be driven at all right now.
-     *
-     * <p>The slot numbers above belong to {@code InventoryMenu}. With a chest open they address
-     * that chest instead, so this refuses rather than clicking blind.
-     */
+    /** Whether the grid can be driven at all: our own menu, and no screen in the way. */
     public static boolean usable(Minecraft mc) {
         return mc.player != null
             && mc.screen == null
             && mc.player.containerMenu == mc.player.inventoryMenu;
     }
 
+    /** True for the hotbar slot ids of the player menu, whose corrections do not land. */
+    public static boolean isHotbarId(int id) {
+        return id >= 36 && id <= 44;
+    }
+
     /**
      * Advances the sequence by at most one click.
      *
-     * @param blockSlotId   container slot holding bone blocks, or -1 when there are none
-     * @param depositSlotId container slot the bone meal goes to, or -1 when there is no room
+     * @param item          what is being crafted from, for the checks and the log
+     * @param sourceId      container slot holding it, or -1 when there is none
+     * @param depositId     main-inventory slot the bone meal goes to, or -1
      * @param unloadAfter   empty the grid after every craft rather than between batches
-     * @return crafts confirmed this tick
+     * @return crafts the server confirmed this tick
      */
-    public int tick(Minecraft mc, int blockSlotId, int depositSlotId, boolean unloadAfter) {
+    public int tick(Minecraft mc, Item item, int sourceId, int depositId, boolean unloadAfter) {
         if (!usable(mc)) {
-            if (step != Step.IDLE) note("aborted: inventory menu is no longer the open one");
+            if (step != Step.IDLE) note("aborted, the inventory menu is no longer the open one");
             step = Step.IDLE;
+            pending = false;
             return 0;
         }
 
         AbstractContainerMenu menu = mc.player.containerMenu;
+
+        // Nothing is read as confirmation until the server has answered the last click.
+        if (pending) {
+            if (menu.getStateId() == sentAt) {
+                if (++waited > ACK_TIMEOUT) {
+                    note("no answer to the last click after " + waited + " ticks, backing out");
+                    pending = false;
+                    enter(Step.UNLOAD);
+                }
+                return 0;
+            }
+            pending = false;
+            waited = 0;
+        }
+
         ItemStack carried = menu.getCarried();
         ItemStack grid = menu.getSlot(GRID_FIRST).getItem();
-        int made = 0;
 
         switch (step) {
             case IDLE -> {
-                if (blockSlotId < 0 || depositSlotId < 0) return 0;
-
-                // Someone else's items in the grid: put them back before using it.
+                if (sourceId < 0 || depositId < 0) return 0;
+                if (!carried.isEmpty()) {
+                    note("cursor holds " + name(carried) + ", waiting for it to clear");
+                    return 0;
+                }
                 if (!gridEmpty(menu)) {
-                    note("grid was not empty, emptying it first");
+                    note("grid is not empty, clearing it first");
                     enter(Step.UNLOAD);
                     return 0;
                 }
-                if (!carried.isEmpty()) {
-                    note("cursor is not empty (" + name(carried) + "), waiting");
-                    return 0;
-                }
 
-                crafts = 0;
-                InvUtils.click().slotId(blockSlotId);
-                enter(Step.GRAB);
+                ingredient = item;
+
+                // Corrections to hotbar slots never land, so move the stack down first.
+                if (isHotbarId(sourceId)) {
+                    note("stowing " + item + " out of the hotbar first");
+                    send(menu, () -> InvUtils.shiftClick().slotId(sourceId));
+                    enter(Step.STOW);
+                } else {
+                    send(menu, () -> InvUtils.click().slotId(sourceId));
+                    enter(Step.GRAB);
+                }
             }
 
+            // Nothing to verify: the next pass simply looks the stack up again, wherever it is.
+            case STOW -> enter(Step.IDLE);
+
             case GRAB -> {
-                if (carried.is(Items.BONE_BLOCK)) {
-                    note("picked up " + carried.getCount() + " bone blocks");
-                    InvUtils.click().slotId(GRID_FIRST);
+                if (carried.is(ingredient)) {
+                    note("holding " + carried.getCount() + " " + ingredient);
+                    send(menu, () -> InvUtils.click().slotId(GRID_FIRST));
                     enter(Step.PLACE);
                 } else {
-                    stall("bone blocks never reached the cursor (cursor=" + name(carried) + ")");
+                    note("server refused the pickup, cursor is " + name(carried));
+                    enter(Step.UNLOAD);
                 }
             }
 
             case PLACE -> {
-                if (grid.is(Items.BONE_BLOCK) && carried.isEmpty()) {
-                    note("grid loaded with " + grid.getCount() + " bone blocks");
+                if (grid.is(ingredient)) {
+                    note("grid holds " + grid.getCount() + " " + ingredient
+                        + ", waiting for the result");
                     enter(Step.WAIT);
                 } else {
-                    stall("blocks never landed in the grid (grid=" + name(grid)
-                        + " cursor=" + name(carried) + ")");
+                    note("server refused the grid load, grid is " + name(grid)
+                        + " and cursor is " + name(carried));
+                    enter(Step.UNLOAD);
                 }
             }
 
             case WAIT -> {
                 ItemStack result = menu.getSlot(RESULT_SLOT).getItem();
                 if (result.is(Items.BONE_MEAL)) {
-                    note("server offered " + result.getCount() + " bone meal");
-                    InvUtils.click().slotId(RESULT_SLOT);
+                    note("server offers " + result.getCount() + " bone meal");
+                    send(menu, () -> InvUtils.click().slotId(RESULT_SLOT));
                     enter(Step.TAKE);
                 } else if (grid.isEmpty()) {
                     note("grid is empty, nothing left to craft");
                     enter(Step.UNLOAD);
-                } else {
-                    stall("server sent no result (result=" + name(result)
-                        + " grid=" + name(grid) + ")");
+                } else if (++waited > ACK_TIMEOUT) {
+                    note("no result after " + waited + " ticks, result slot is " + name(result));
+                    enter(Step.UNLOAD);
                 }
             }
 
             case TAKE -> {
                 if (carried.is(Items.BONE_MEAL)) {
-                    if (depositSlotId < 0) {
-                        note("nowhere to put the bone meal, putting it back");
-                        InvUtils.click().slotId(RESULT_SLOT);
-                        enter(Step.UNLOAD);
-                    } else {
-                        InvUtils.click().slotId(depositSlotId);
-                        enter(Step.STORE);
-                    }
+                    note("took " + carried.getCount() + " bone meal");
+                    send(menu, () -> InvUtils.click().slotId(depositId));
+                    enter(Step.STORE);
                 } else {
-                    // The click on the result was undone: the craft did not happen.
-                    stall("result did not come to the cursor (cursor=" + name(carried) + ")");
+                    note("server refused the craft, cursor is " + name(carried));
+                    enter(Step.UNLOAD);
                 }
             }
 
             case STORE -> {
                 if (carried.isEmpty()) {
-                    crafts++;
-                    made = 1;
-                    note("craft confirmed (" + crafts + " this run)");
-                    enter(unloadAfter ? Step.UNLOAD : Step.WAIT);
-                } else {
-                    stall("bone meal stuck on the cursor (" + name(carried) + ")");
+                    note("stored, grid now holds " + name(grid));
+                    enter(unloadAfter || grid.isEmpty() ? Step.UNLOAD : Step.WAIT);
+                    return 1;
                 }
+                note("server refused the deposit, cursor still holds " + name(carried));
+                enter(Step.UNLOAD);
             }
 
             case UNLOAD -> {
-                if (!carried.isEmpty() && depositSlotId >= 0) {
-                    InvUtils.click().slotId(depositSlotId);
-                    waited = 0;
+                if (!carried.isEmpty() && depositId >= 0) {
+                    send(menu, () -> InvUtils.click().slotId(depositId));
                 } else if (gridEmpty(menu)) {
-                    note("grid empty, done");
+                    note("grid clear, sequence finished");
                     step = Step.IDLE;
                 } else {
                     for (int i = GRID_FIRST; i <= GRID_LAST; i++) {
                         if (!menu.getSlot(i).getItem().isEmpty()) {
-                            InvUtils.shiftClick().slotId(i);
+                            int slot = i;
+                            send(menu, () -> InvUtils.shiftClick().slotId(slot));
                             break;
                         }
                     }
-                    if (++waited > STEP_TIMEOUT) {
-                        note("could not empty the grid, giving up");
+                    if (++waited > ACK_TIMEOUT) {
+                        note("could not clear the grid, giving up");
                         step = Step.IDLE;
                     }
                 }
             }
         }
 
-        return made;
+        return 0;
     }
 
-    /** Brings everything home: called when the module stops or the quota is met. */
-    public void finish(Minecraft mc) {
-        if (step == Step.IDLE) return;
-        enter(Step.UNLOAD);
+    /** Brings the ingredients home; called when the module stops or the quota is met. */
+    public void finish() {
+        if (step != Step.IDLE) enter(Step.UNLOAD);
+    }
+
+    /** Sends one click and remembers the state it went out on, so its answer is detectable. */
+    private void send(AbstractContainerMenu menu, Runnable click) {
+        sentAt = menu.getStateId();
+        pending = true;
+        click.run();
     }
 
     private void enter(Step next) {
         step = next;
         waited = 0;
-    }
-
-    /** A step that has not shown its effect yet: wait, then recover the items. */
-    private void stall(String what) {
-        if (++waited <= STEP_TIMEOUT) return;
-
-        note("stalled - " + what);
-        enter(Step.UNLOAD);
     }
 
     private void note(String message) {

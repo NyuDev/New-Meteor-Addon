@@ -24,6 +24,7 @@ import net.minecraft.core.Direction;
 import net.minecraft.tags.BlockTags;
 import net.minecraft.util.Mth;
 import net.minecraft.world.InteractionHand;
+import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.level.block.Block;
@@ -133,6 +134,8 @@ public class AutoMoss extends Module {
     private int azaleaTimer;
     private int walkTimer;
     private int craftTimer;
+    /** Bone meal held at the previous craft tick, so a gain is measured across the step. */
+    private int craftMealBefore;
     private int ticks;
 
     // Scan counters, only meaningful when debug is on (the scan runs in full then).
@@ -160,6 +163,7 @@ public class AutoMoss extends Module {
         azaleaTimer = 0;
         walkTimer = 0;
         craftTimer = 0;
+        craftMealBefore = 0;
         ticks = 0;
         offsets.invalidate();
 
@@ -195,7 +199,7 @@ public class AutoMoss extends Module {
         placeTarget = null;
 
         // Never leave bone blocks sitting in the crafting grid: a death drops them.
-        if (crafter.isBusy()) crafter.finish(mc);
+        if (crafter.isBusy()) crafter.finish();
 
         // Only stop pathing we started ourselves.
         if (walkTarget != null || exploring) {
@@ -555,52 +559,77 @@ public class AutoMoss extends Module {
     private boolean maybeCraft() {
         if (!BoneCrafter.usable(mc)) return false;
 
-        int meal = InvUtils.find(Items.BONE_MEAL).count();
-        boolean wanted = cfg.craftBoneMeal.get() && meal < cfg.craftBelow.get();
+        int before = InvUtils.find(Items.BONE_MEAL).count();
+        boolean wanted = cfg.craftBoneMeal.get() && before < cfg.craftBelow.get();
 
         // Anything left in the grid is dropped by a death, so bringing it home wins over every
         // reason to stop: the quota being met, the setting going off, running out of blocks.
-        if (!wanted && crafter.isBusy()) crafter.finish(mc);
+        if (!wanted && crafter.isBusy()) crafter.finish();
         else if (!wanted) return false;
 
-        FindItemResult blocks = InvUtils.find(Items.BONE_BLOCK);
-        if (!blocks.found() && !crafter.isBusy()) return false;
+        Item source = Items.BONE_BLOCK;
+        int sourceIndex = findIngredient(Items.BONE_BLOCK);
+        if (sourceIndex == -1 && cfg.craftFromBones.get()) {
+            source = Items.BONE;
+            sourceIndex = findIngredient(Items.BONE);
+        }
+        if (sourceIndex == -1 && !crafter.isBusy()) return false;
 
         int deposit = depositSlot();
+        if (deposit == -1 && !crafter.isBusy() && debugDue()) {
+            log("craft: no free inventory slot to put the bone meal in");
+        }
 
-        int made = crafter.tick(mc,
-            blocks.found() ? SlotUtils.indexToId(blocks.slot()) : -1,
+        int made = crafter.tick(mc, source,
+            sourceIndex == -1 ? -1 : SlotUtils.indexToId(sourceIndex),
             deposit == -1 ? -1 : SlotUtils.indexToId(deposit),
             cfg.craftSafe.get());
 
         if (made > 0) {
             craftTimer = cfg.craftDelay.get();
-            if (cfg.debug.get()) {
-                log("craft: bone meal %d -> %d", meal, InvUtils.find(Items.BONE_MEAL).count());
-            }
-        } else if (deposit == -1 && !crafter.isBusy() && debugDue()) {
-            log("craft: no free slot to put the bone meal in");
+            // Measured across the step the server confirmed, not twice in the same tick.
+            if (cfg.debug.get()) log("craft: bone meal was %d, now %d", craftMealBefore, before);
         }
+        craftMealBefore = before;
 
         // Keep the tick while a sequence is in flight, so nothing else clicks over it.
         return crafter.isBusy();
     }
 
     /**
-     * Where a finished craft should go.
+     * Finds an ingredient, preferring the main inventory.
+     *
+     * <p>A hotbar stack works, but only after the crafter stows it: the server cannot correct
+     * a container-0 hotbar slot on the client, so working there desyncs. Looking in the main
+     * inventory first saves that detour whenever there is a stack down there already.
+     */
+    private int findIngredient(Item item) {
+        for (int i = BoneCrafter.MAIN_FIRST; i <= BoneCrafter.MAIN_LAST; i++) {
+            if (mc.player.getInventory().getItem(i).is(item)) return i;
+        }
+        for (int i = 0; i < 9; i++) {
+            if (mc.player.getInventory().getItem(i).is(item)) return i;
+        }
+        return -1;
+    }
+
+    /**
+     * Where a finished craft should go: main inventory only.
      *
      * <p>An existing bone meal stack with room comes first, so repeated rounds pile into one
-     * slot instead of scattering nine at a time across the inventory.
+     * slot instead of scattering a few at a time across the inventory. The hotbar is excluded
+     * outright - a deposit there is one the server can never correct, and {@code auto-refill}
+     * brings bone meal up to the hotbar anyway.
      */
     private int depositSlot() {
-        for (int i = 0; i <= SlotUtils.MAIN_END; i++) {
+        for (int i = BoneCrafter.MAIN_FIRST; i <= BoneCrafter.MAIN_LAST; i++) {
             ItemStack stack = mc.player.getInventory().getItem(i);
             if (stack.is(Items.BONE_MEAL)
-                && stack.getCount() + BoneCrafter.PER_BLOCK <= stack.getMaxStackSize()) {
+                && stack.getCount() + BoneCrafter.MAX_YIELD <= stack.getMaxStackSize()) {
                 return i;
             }
         }
-        for (int i = 0; i <= SlotUtils.MAIN_END; i++) {
+        for (int i = BoneCrafter.MAIN_FIRST; i <= BoneCrafter.MAIN_LAST; i++) {
             if (mc.player.getInventory().getItem(i).isEmpty()) return i;
         }
         return -1;

@@ -43,6 +43,7 @@ public final class MossSettings {
     public final Setting<Boolean> pauseWhileUsing;
     public final Setting<Boolean> craftBoneMeal;
     public final Setting<Integer> craftBelow;
+    public final Setting<Boolean> craftFromBones;
     public final Setting<Boolean> craftSafe;
     public final Setting<Integer> craftDelay;
     public final Setting<Boolean> clearObstructions;
@@ -152,6 +153,14 @@ public final class MossSettings {
             .description("Only craft while you hold less bone meal than this. A stack keeps you " +
                          "working without turning your inventory into bone meal.")
             .defaultValue(64).min(9).max(576).sliderRange(9, 320)
+            .visible(craftBoneMeal::get)
+            .build());
+
+        craftFromBones = sgCraft.add(new BoolSetting.Builder()
+            .name("craft-from-bones")
+            .description("Also use plain bones, which craft three bone meal each. Bone blocks " +
+                         "are used up first, being nine to a block.")
+            .defaultValue(true)
             .visible(craftBoneMeal::get)
             .build());
 
