@@ -92,7 +92,7 @@ public class AutoMoss extends Module {
     /** Conversion predictor, rebuilt only when its inputs change. See {@link #patch()}. */
     private MossPatch patch;
     private int patchRadius = -1;
-    private boolean patchStoneOnly;
+    private boolean patchConvertDirt;
     private net.minecraft.world.level.Level patchLevel;
     /** Reused across the whole scan so a tick allocates nothing. */
     private final BlockPos.MutableBlockPos scanPos = new BlockPos.MutableBlockPos();
@@ -161,11 +161,11 @@ public class AutoMoss extends Module {
         }
 
         if (cfg.debug.get() && mc.player != null) {
-            log("enabled: range=%.1f patchRadius=%d minConversions=%d stoneOnly=%s "
-                + "clearObstructions=%s placeMoss=%s baritone=%s",
+            log("enabled: range=%.1f patchRadius=%d minConversions=%d convertDirt=%s "
+                + "clearObstructions=%s placeMoss=%s airPlace=%s baritone=%s",
                 cfg.range.get(), cfg.patchRadius.get(), cfg.minConversions.get(),
-                cfg.stoneOnly.get(), cfg.clearObstructions.get(), cfg.placeMoss.get(),
-                cfg.baritone.get());
+                cfg.convertDirt.get(), cfg.clearObstructions.get(), cfg.placeMoss.get(),
+                cfg.airPlace.get(), cfg.baritone.get());
             log("enabled: boneMealHotbar=%d boneMealTotal=%d mossHotbar=%d",
                 InvUtils.findInHotbar(Items.BONE_MEAL).count(),
                 InvUtils.find(Items.BONE_MEAL).count(),
@@ -252,10 +252,10 @@ public class AutoMoss extends Module {
                     seenMoss);
             } else if (seenMossWithAir > 0 && seenMossTooPoor == seenMossWithAir) {
                 log("  -> %d moss blocks are usable but none has %d convertible column(s) "
-                    + "nearby (patch-radius=%d stone-only=%s); everything around them is "
+                    + "nearby (patch-radius=%d convert-dirt=%s); everything around them is "
                     + "already moss or buried",
                     seenMossWithAir, cfg.minConversions.get(), cfg.patchRadius.get(),
-                    cfg.stoneOnly.get());
+                    cfg.convertDirt.get());
             } else if (seenMossObstructed > 0 && clearTarget == null && mossTarget == null) {
                 log("  -> %d covered moss blocks, but uncovering none of them would convert "
                     + "anything", seenMossObstructed);
@@ -298,7 +298,17 @@ public class AutoMoss extends Module {
         if (placeTarget != null && hasMoss && keepTrying(placeTarget)) {
             timer = cfg.delay.get();
             if (cfg.debug.get()) log("action: placing moss at %s", placeTarget);
-            BlockUtils.place(placeTarget, moss, true, 50);
+
+            boolean placed = Interactions.place(placeTarget, moss, cfg.rotate.get(),
+                cfg.silentRotations.get(), cfg.swing.get(), cfg.airPlace.get());
+
+            // Nothing to click against and air-place is off: blacklist it rather than come
+            // straight back to the same impossible spot on the next scan.
+            if (!placed) {
+                blacklist.put(placeTarget.immutable(), ticks + VISITED_TIMEOUT);
+                if (cfg.debug.get()) log("skipped %s: nothing to place against", placeTarget);
+                placeTarget = null;
+            }
         }
     }
 
@@ -399,6 +409,10 @@ public class AutoMoss extends Module {
                 scanPos.set(x, y, z);
                 if (!BlockUtils.canPlace(scanPos)) continue;
 
+                // Something solid to click against. The block below already passed, but it can
+                // be a fluid or a container, neither of which a placement can be aimed at.
+                if (!cfg.airPlace.get() && BlockUtils.getPlaceSide(scanPos) == null) continue;
+
                 if (patch().countConversions(x, y + 1, z, needed) >= needed) {
                     placeTarget = notBlacklisted(x, y, z);
                 }
@@ -411,23 +425,23 @@ public class AutoMoss extends Module {
     /**
      * A predictor bound to the current world and settings.
      *
-     * <p>Rebuilt per use rather than cached: patch-radius and stone-only can change between
+     * <p>Rebuilt per use rather than cached: patch-radius and convert-dirt can change between
      * ticks from the GUI, and a stale predictor would quietly spend bone meal against rules
      * the user had already turned off.
      */
     private MossPatch patch() {
         int radius = cfg.patchRadius.get();
-        boolean stoneOnly = cfg.stoneOnly.get();
+        boolean convertDirt = cfg.convertDirt.get();
 
         // Cached, but thrown away the moment the settings or the world change. Rebuilding it
         // per call was allocating one predictor - and its cursor - for every candidate block
         // in a scan that walks over a thousand offsets, in a module written specifically to
         // allocate nothing per tick.
-        if (patch == null || radius != patchRadius || stoneOnly != patchStoneOnly
+        if (patch == null || radius != patchRadius || convertDirt != patchConvertDirt
             || patchLevel != mc.level) {
-            patch = new MossPatch(mc.level, radius, stoneOnly);
+            patch = new MossPatch(mc.level, radius, convertDirt);
             patchRadius = radius;
-            patchStoneOnly = stoneOnly;
+            patchConvertDirt = convertDirt;
             patchLevel = mc.level;
         }
         return patch;

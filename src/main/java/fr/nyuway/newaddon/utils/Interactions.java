@@ -1,5 +1,6 @@
 package fr.nyuway.newaddon.utils;
 
+import meteordevelopment.meteorclient.utils.player.FindItemResult;
 import meteordevelopment.meteorclient.utils.player.Rotations;
 import meteordevelopment.meteorclient.utils.world.BlockUtils;
 import net.minecraft.client.Minecraft;
@@ -62,6 +63,38 @@ public final class Interactions {
         BlockUtils.interact(
             new BlockHitResult(hitVec(pos, face), face, pos, false),
             InteractionHand.MAIN_HAND, swing);
+    }
+
+    /**
+     * Places a block, honouring the caller's rotation choice.
+     *
+     * <p>{@code BlockUtils.place} takes a {@code rotate} flag, but its rotation is always the
+     * visible kind - it has no way to ask for a silent one. So when a rotation is wanted this
+     * turns the head itself and hands {@code place} a {@code rotate} of {@code false}; when it
+     * is not wanted, nothing touches yaw or pitch at all and the block simply goes down at the
+     * angle the player is already holding.
+     *
+     * <p>The aim point is the same one {@code place} clicks: the centre of the face of the
+     * supporting neighbour, not the centre of the target. Aiming anywhere else would put the
+     * server's idea of where we are looking half a block off the click we then send.
+     *
+     * @param allowAirPlace place even with no block to click against. Meteor falls back to
+     *                      clicking the target position itself, which no vanilla server
+     *                      accepts - the packet names a block that is not there. Left off,
+     *                      such a target is skipped instead of silently wasting the attempt.
+     * @return whether a placement was attempted
+     */
+    public static boolean place(BlockPos pos, FindItemResult item, boolean rotate, boolean silent,
+                                boolean swing, boolean allowAirPlace) {
+        Direction side = BlockUtils.getPlaceSide(pos);
+        if (side == null && !allowAirPlace) return false;
+
+        if (!rotate) return BlockUtils.place(pos, item, false, PRIORITY, swing, true);
+
+        Vec3 aim = side == null ? Vec3.atCenterOf(pos) : hitVec(pos, side);
+        Rotations.rotate(Rotations.getYaw(aim), Rotations.getPitch(aim), PRIORITY, !silent,
+            () -> BlockUtils.place(pos, item, false, PRIORITY, swing, true));
+        return true;
     }
 
     /**

@@ -25,7 +25,7 @@ public final class MossSettings {
     public final Setting<Double> range;
     public final Setting<Integer> patchRadius;
     public final Setting<Integer> minConversions;
-    public final Setting<Boolean> stoneOnly;
+    public final Setting<Boolean> convertDirt;
     public final Setting<Integer> delay;
     public final Setting<Boolean> pauseOnKillAura;
     public final Setting<Boolean> rotate;
@@ -35,6 +35,7 @@ public final class MossSettings {
     public final Setting<Boolean> autoDisable;
     public final Setting<Boolean> swing;
     public final Setting<Boolean> placeMoss;
+    public final Setting<Boolean> airPlace;
     public final Setting<Boolean> clearObstructions;
     public final Setting<Boolean> growAzalea;
     public final Setting<Integer> azaleaInterval;
@@ -84,10 +85,10 @@ public final class MossSettings {
             .defaultValue(1).min(1).max(8).sliderMin(1).sliderMax(8)
             .build());
 
-        stoneOnly = sgGeneral.add(new BoolSetting.Builder()
-            .name("stone-only")
-            .description("Count only stone-family blocks (#base_stone_overworld). Off also counts " +
-                         "the dirt family, which converts too.")
+        convertDirt = sgGeneral.add(new BoolSetting.Builder()
+            .name("convert-dirt")
+            .description("Also count the dirt family (#dirt), which the patch converts just like " +
+                         "stone. Off counts only stone (#base_stone_overworld).")
             .defaultValue(false)
             .build());
 
@@ -152,6 +153,15 @@ public final class MossSettings {
                          "a spot that converts where there was nothing to work with. Needs moss " +
                          "blocks on you; does nothing otherwise.")
             .defaultValue(false)
+            .build());
+
+        airPlace = sgGeneral.add(new BoolSetting.Builder()
+            .name("air-place")
+            .description("Allow placing a moss block with nothing to click against. A vanilla " +
+                         "server rejects this, since the packet names a supporting block that is " +
+                         "not there; leave it off unless you know yours accepts it.")
+            .defaultValue(false)
+            .visible(placeMoss::get)
             .build());
 
         clearObstructions = sgClear.add(new BoolSetting.Builder()

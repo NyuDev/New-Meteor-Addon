@@ -338,7 +338,9 @@ public class ElytraResupply extends Module {
             return;
         }
 
-        BlockUtils.place(chestPos, chest, true, 50);
+        // Through Interactions so the rotation honours silent-rotations; BlockUtils.place
+        // can only turn the visible camera.
+        Interactions.place(chestPos, chest, true, cfg.silentRotations.get(), true, true);
     }
 
     /** Right-clicks a placed block and moves on once its container menu is really open. */
@@ -442,7 +444,7 @@ public class ElytraResupply extends Module {
             return;
         }
 
-        BlockUtils.place(shulkerPos, shulker, true, 50);
+        Interactions.place(shulkerPos, shulker, true, cfg.silentRotations.get(), true, true);
     }
 
     /**

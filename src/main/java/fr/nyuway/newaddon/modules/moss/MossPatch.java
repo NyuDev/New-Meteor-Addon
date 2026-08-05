@@ -33,15 +33,15 @@ public final class MossPatch {
 
     private final Level level;
     private final int patchRadius;
-    private final boolean stoneOnly;
+    private final boolean convertDirt;
 
     /** Reused across a count so checking a target allocates nothing. */
     private final BlockPos.MutableBlockPos cursor = new BlockPos.MutableBlockPos();
 
-    public MossPatch(Level level, int patchRadius, boolean stoneOnly) {
+    public MossPatch(Level level, int patchRadius, boolean convertDirt) {
         this.level = level;
         this.patchRadius = patchRadius;
-        this.stoneOnly = stoneOnly;
+        this.convertDirt = convertDirt;
     }
 
     /**
@@ -96,8 +96,8 @@ public final class MossPatch {
         // Already moss: placeGround leaves it alone, so it is worth no bone meal at all.
         if (state.is(Blocks.MOSS_BLOCK)) return false;
 
-        return stoneOnly
-            ? state.is(BlockTags.BASE_STONE_OVERWORLD)
-            : state.is(BlockTags.MOSS_REPLACEABLE);
+        return convertDirt
+            ? state.is(BlockTags.MOSS_REPLACEABLE)
+            : state.is(BlockTags.BASE_STONE_OVERWORLD);
     }
 }

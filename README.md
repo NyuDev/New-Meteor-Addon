@@ -23,16 +23,17 @@ already-moss doesn't count) instead of spamming.
 | `range` | 4.5 | Search radius from your eyes. |
 | `patch-radius` | 1 | 1 = guaranteed reach, 2 = also counts the ~50% edge columns. |
 | `min-conversions` | 1 | Minimum blocks that must convert before spending an item. |
-| `stone-only` | off | Ignore the dirt family. |
+| `convert-dirt` | off | Also count the dirt family, which converts like stone. |
 | `delay` | 4 | Ticks between actions. |
-| `pause-on-killaura` | on | Stop while KillAura is active. |
-| `rotate` / `swap-back` / `swing` | on | Interaction behaviour. |
+| `pause-on-killaura` | on | Stop while KillAura is actually fighting something. |
+| `rotate` / `swap-back` / `swing` | on | Interaction behaviour. Off places blocks at the angle you are already holding. |
 | `silent-rotations` | on | Face the block without turning your camera; the server sees the same rotation either way. |
 | `auto-refill` | on | Refill hotbar bone meal from inventory. |
 | `auto-disable` | on | Turn off when totally out of bone meal. |
 | `place-moss` | off | Place carried moss next to exposed stone to create work. |
+| `air-place` | off | Allow placing with nothing to click against. Vanilla servers reject it. |
 | `render` / `shape-mode` / colors | on | Target highlight. |
-| `debug` / `debug-interval` | off | Log scan counters to diagnose an idle module. |
+| `debug` / `debug-interval` | on | Log scan counters to diagnose an idle module. |
 
 **Obstructions** - `clear-obstructions` (on): breaks whatever covers usable moss, but only
 instant-break blocks (grass, ferns, flowers, azalea). Carpets are skipped (not instant).
