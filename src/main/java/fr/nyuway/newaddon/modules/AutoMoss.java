@@ -248,7 +248,7 @@ public class AutoMoss extends Module {
         if (!bonemeal.found()) {
             mossTarget = clearTarget = azaleaTarget = placeTarget = null;
 
-            if (ready && cfg.autoRefill.get() && refillHotbar()) {
+            if (ready && cfg.autoRefill.get() && !crafter.isBusy() && refillHotbar()) {
                 // Give the move a tick to land before looking for the stack again.
                 timer = cfg.delay.get();
                 if (cfg.debug.get()) log("refilled bone meal from inventory");
@@ -596,40 +596,31 @@ public class AutoMoss extends Module {
         return crafter.isBusy();
     }
 
-    /**
-     * Finds an ingredient, preferring the main inventory.
-     *
-     * <p>A hotbar stack works, but only after the crafter stows it: the server cannot correct
-     * a container-0 hotbar slot on the client, so working there desyncs. Looking in the main
-     * inventory first saves that detour whenever there is a stack down there already.
-     */
+    /** Finds an ingredient anywhere in the hotbar or main inventory. */
     private int findIngredient(Item item) {
-        for (int i = BoneCrafter.MAIN_FIRST; i <= BoneCrafter.MAIN_LAST; i++) {
-            if (mc.player.getInventory().getItem(i).is(item)) return i;
-        }
-        for (int i = 0; i < 9; i++) {
+        for (int i = 0; i <= SlotUtils.MAIN_END; i++) {
             if (mc.player.getInventory().getItem(i).is(item)) return i;
         }
         return -1;
     }
 
     /**
-     * Where a finished craft should go: main inventory only.
+     * Where a finished craft should go.
      *
      * <p>An existing bone meal stack with room comes first, so repeated rounds pile into one
-     * slot instead of scattering a few at a time across the inventory. The hotbar is excluded
-     * outright - a deposit there is one the server can never correct, and {@code auto-refill}
-     * brings bone meal up to the hotbar anyway.
+     * slot instead of scattering a few at a time across the inventory. A full inventory with a
+     * nearly full bone meal stack legitimately has nowhere to put a craft, which is what the
+     * caller reports.
      */
     private int depositSlot() {
-        for (int i = BoneCrafter.MAIN_FIRST; i <= BoneCrafter.MAIN_LAST; i++) {
+        for (int i = 0; i <= SlotUtils.MAIN_END; i++) {
             ItemStack stack = mc.player.getInventory().getItem(i);
             if (stack.is(Items.BONE_MEAL)
                 && stack.getCount() + BoneCrafter.MAX_YIELD <= stack.getMaxStackSize()) {
                 return i;
             }
         }
-        for (int i = BoneCrafter.MAIN_FIRST; i <= BoneCrafter.MAIN_LAST; i++) {
+        for (int i = 0; i <= SlotUtils.MAIN_END; i++) {
             if (mc.player.getInventory().getItem(i).isEmpty()) return i;
         }
         return -1;
