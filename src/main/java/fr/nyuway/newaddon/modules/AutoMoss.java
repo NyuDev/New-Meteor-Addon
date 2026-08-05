@@ -95,7 +95,9 @@ public class AutoMoss extends Module {
     private final OffsetTable offsets = new OffsetTable();
 
     /** Holds the crafting sequence across the round trips it needs. */
-    private final BoneCrafter crafter = new BoneCrafter();
+    private final BoneCrafter crafter = new BoneCrafter(m -> {
+        if (cfg.debug.get()) log("craft: %s", m);
+    });
 
     /** Conversion predictor, rebuilt only when its inputs change. See {@link #patch()}. */
     private MossPatch patch;
@@ -193,7 +195,7 @@ public class AutoMoss extends Module {
         placeTarget = null;
 
         // Never leave bone blocks sitting in the crafting grid: a death drops them.
-        if (crafter.isLoaded()) crafter.unload(mc);
+        if (crafter.isBusy()) crafter.finish(mc);
 
         // Only stop pathing we started ourselves.
         if (walkTarget != null || exploring) {
@@ -228,7 +230,7 @@ public class AutoMoss extends Module {
             return;
         }
 
-        if (craftTimer > 0) craftTimer--;
+        if (craftTimer > 0 && !crafter.isBusy()) craftTimer--;
         else if (maybeCraft()) return;
 
         boolean ready = timer <= 0;
@@ -551,41 +553,37 @@ public class AutoMoss extends Module {
      * @return true when a round happened and the tick is spent
      */
     private boolean maybeCraft() {
-        boolean enough = InvUtils.find(Items.BONE_MEAL).count() >= cfg.craftBelow.get();
-
-        // A grid left loaded is bone blocks that a death would drop, so emptying it wins over
-        // every reason not to run: the module being switched off, the quota being met, a
-        // container being open.
-        if (!cfg.craftBoneMeal.get() || enough) {
-            if (crafter.isLoaded()) {
-                crafter.unload(mc);
-                if (cfg.debug.get()) log("craft: done, grid emptied");
-                return true;
-            }
-            return false;
-        }
-
-        FindItemResult blocks = InvUtils.find(Items.BONE_BLOCK);
-        if (!blocks.found() && !crafter.isLoaded()) return false;
         if (!BoneCrafter.usable(mc)) return false;
 
+        int meal = InvUtils.find(Items.BONE_MEAL).count();
+        boolean wanted = cfg.craftBoneMeal.get() && meal < cfg.craftBelow.get();
+
+        // Anything left in the grid is dropped by a death, so bringing it home wins over every
+        // reason to stop: the quota being met, the setting going off, running out of blocks.
+        if (!wanted && crafter.isBusy()) crafter.finish(mc);
+        else if (!wanted) return false;
+
+        FindItemResult blocks = InvUtils.find(Items.BONE_BLOCK);
+        if (!blocks.found() && !crafter.isBusy()) return false;
+
         int deposit = depositSlot();
-        if (deposit == -1) {
-            if (crafter.isLoaded()) crafter.unload(mc);
-            else if (debugDue()) log("craft: no free slot to put the bone meal in");
-            return false;
-        }
 
         int made = crafter.tick(mc,
             blocks.found() ? SlotUtils.indexToId(blocks.slot()) : -1,
-            SlotUtils.indexToId(deposit),
+            deposit == -1 ? -1 : SlotUtils.indexToId(deposit),
             cfg.craftSafe.get());
 
         if (made > 0) {
             craftTimer = cfg.craftDelay.get();
-            if (cfg.debug.get()) log("craft: 1 bone block -> %d bone meal", BoneCrafter.PER_BLOCK);
+            if (cfg.debug.get()) {
+                log("craft: bone meal %d -> %d", meal, InvUtils.find(Items.BONE_MEAL).count());
+            }
+        } else if (deposit == -1 && !crafter.isBusy() && debugDue()) {
+            log("craft: no free slot to put the bone meal in");
         }
-        return made != 0;
+
+        // Keep the tick while a sequence is in flight, so nothing else clicks over it.
+        return crafter.isBusy();
     }
 
     /**
