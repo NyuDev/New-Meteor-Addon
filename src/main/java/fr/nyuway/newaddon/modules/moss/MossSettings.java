@@ -43,7 +43,7 @@ public final class MossSettings {
     public final Setting<Boolean> pauseWhileUsing;
     public final Setting<Boolean> craftBoneMeal;
     public final Setting<Integer> craftBelow;
-    public final Setting<Integer> craftBatch;
+    public final Setting<Boolean> craftSafe;
     public final Setting<Integer> craftDelay;
     public final Setting<Boolean> clearObstructions;
     public final Setting<Boolean> growAzalea;
@@ -75,12 +75,6 @@ public final class MossSettings {
         SettingGroup sgBaritone = settings.createGroup("Baritone");
         SettingGroup sgRender = settings.createGroup("Render");
         SettingGroup sgDebug = settings.createGroup("Debug");
-
-        range = sgGeneral.add(new DoubleSetting.Builder()
-            .name("range")
-            .description("How far to look for moss blocks, measured from your eyes.")
-            .defaultValue(4.5).min(1.0).max(6.0).sliderMin(1.0).sliderMax(6.0)
-            .build());
 
         patchRadius = sgGeneral.add(new IntSetting.Builder()
             .name("patch-radius")
@@ -161,18 +155,21 @@ public final class MossSettings {
             .visible(craftBoneMeal::get)
             .build());
 
-        craftBatch = sgCraft.add(new IntSetting.Builder()
-            .name("craft-batch")
-            .description("Bone blocks per round, each worth 9 bone meal. Capped at 7 so one " +
-                         "round never exceeds a single stack on the cursor.")
-            .defaultValue(3).min(1).max(7).sliderRange(1, 7)
+        craftSafe = sgCraft.add(new BoolSetting.Builder()
+            .name("2b2t-safe")
+            .description("Empty the crafting grid after every single craft. Anything left in " +
+                         "the grid is dropped when you die or disconnect, which on an anarchy " +
+                         "server is how you lose a stack of bone blocks. Costs one extra click " +
+                         "per craft and nothing else, so it is worth leaving on anywhere.")
+            .defaultValue(true)
             .visible(craftBoneMeal::get)
             .build());
 
         craftDelay = sgCraft.add(new IntSetting.Builder()
             .name("craft-delay")
-            .description("Ticks between rounds. Crafting is inventory packets, so spacing the " +
-                         "rounds out is what keeps this quiet.")
+            .description("Ticks between crafts, on top of the server round trip each one " +
+                         "already costs. Crafting is inventory packets; spacing them is what " +
+                         "keeps this quiet.")
             .defaultValue(20).min(5).max(200).sliderRange(5, 100)
             .visible(craftBoneMeal::get)
             .build());
@@ -213,6 +210,14 @@ public final class MossSettings {
                          "use, and while any screen is open. Bone mealing swaps your hotbar " +
                          "slot, and a swap cancels whatever you were in the middle of.")
             .defaultValue(true)
+            .build());
+
+        range = sgReach.add(new DoubleSetting.Builder()
+            .name("scan-range")
+            .description("How far to look for moss, stone and azalea, measured from your eyes. " +
+                         "This is what the module considers, not what it is allowed to touch - " +
+                         "the two limits below decide that.")
+            .defaultValue(4.5).min(1.0).max(6.0).sliderMin(1.0).sliderMax(6.0)
             .build());
 
         vanillaReach = sgReach.add(new BoolSetting.Builder()

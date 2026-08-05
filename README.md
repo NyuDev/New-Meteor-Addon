@@ -20,7 +20,6 @@ already-moss doesn't count) instead of spamming.
 
 | Setting | Default | |
 | --- | --- | --- |
-| `range` | 4.5 | Search radius from your eyes. |
 | `patch-radius` | 1 | 1 = guaranteed reach, 2 = also counts the ~50% edge columns. |
 | `min-conversions` | 1 | Minimum blocks that must convert before spending an item. |
 | `convert-dirt` | off | Also count the dirt family, which converts like stone. |
@@ -31,14 +30,16 @@ already-moss doesn't count) instead of spamming.
 | `auto-refill` | on | Refill hotbar bone meal from inventory. |
 | `pause-while-using` | on | Stop while eating, drinking or with a screen open; a hotbar swap cancels those. |
 | `auto-disable` | on | Turn off when totally out of bone meal. |
-| `place-moss` | off | Place carried moss next to exposed stone to create work. |
+| `place-moss` | off | Place carried moss next to stone no existing patch can reach. |
 | `air-place` | off | Allow placing with nothing to click against. Vanilla servers reject it. |
+| `scan-range` | 4.5 | How far to look, from your eyes. What is considered, not what may be touched. |
 | `vanilla-reach` | on | Limit breaking and placing to the range the client allows. Bone mealing is unaffected. |
 | `break-place-reach` | 3.5 | Your own limit, eyes to nearest point of the block. Shown when `vanilla-reach` is off. |
 | `escape-stuck` | on | Break out when a block closes around you, head first. |
 | `pause-while-stuck` | on | Do nothing else until free. |
 | `craft-bone-meal` | off | Craft bone blocks into bone meal in the 2x2 grid, nothing opened. |
-| `craft-below` / `craft-batch` / `craft-delay` | 64 / 3 / 20 | Craft under this much bone meal, this many blocks per round, this many ticks apart. |
+| `craft-below` / `craft-delay` | 64 / 20 | Craft while under this much bone meal, this many ticks apart. |
+| `2b2t-safe` | on | Empty the grid after every craft, so a death never drops what is in it. |
 | `render` / `shape-mode` / colors | on | Target highlight. |
 | `debug` / `debug-interval` | on | Log scan counters to diagnose an idle module. |
 

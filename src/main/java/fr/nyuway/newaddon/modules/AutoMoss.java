@@ -24,6 +24,7 @@ import net.minecraft.core.Direction;
 import net.minecraft.tags.BlockTags;
 import net.minecraft.util.Mth;
 import net.minecraft.world.InteractionHand;
+import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
@@ -92,6 +93,9 @@ public class AutoMoss extends Module {
     private final MossSettings cfg = new MossSettings(settings);
 
     private final OffsetTable offsets = new OffsetTable();
+
+    /** Holds the crafting sequence across the round trips it needs. */
+    private final BoneCrafter crafter = new BoneCrafter();
 
     /** Conversion predictor, rebuilt only when its inputs change. See {@link #patch()}. */
     private MossPatch patch;
@@ -187,6 +191,9 @@ public class AutoMoss extends Module {
         clearTarget = null;
         azaleaTarget = null;
         placeTarget = null;
+
+        // Never leave bone blocks sitting in the crafting grid: a death drops them.
+        if (crafter.isLoaded()) crafter.unload(mc);
 
         // Only stop pathing we started ourselves.
         if (walkTarget != null || exploring) {
@@ -440,7 +447,8 @@ public class AutoMoss extends Module {
                 // be a fluid or a container, neither of which a placement can be aimed at.
                 if (!cfg.airPlace.get() && BlockUtils.getPlaceSide(scanPos) == null) continue;
 
-                if (patch().countConversions(x, y + 1, z, needed) >= needed) {
+                if (patch().countConversions(x, y + 1, z, needed) >= needed
+                    && !mossCouldServe(x, y, z)) {
                     placeTarget = notBlacklisted(x, y, z);
                 }
             }
@@ -543,31 +551,57 @@ public class AutoMoss extends Module {
      * @return true when a round happened and the tick is spent
      */
     private boolean maybeCraft() {
-        if (!cfg.craftBoneMeal.get()) return false;
-        if (InvUtils.find(Items.BONE_MEAL).count() >= cfg.craftBelow.get()) return false;
+        boolean enough = InvUtils.find(Items.BONE_MEAL).count() >= cfg.craftBelow.get();
 
-        FindItemResult blocks = InvUtils.find(Items.BONE_BLOCK);
-        if (!blocks.found() || !BoneCrafter.ready(mc)) return false;
-
-        int free = firstEmptySlot();
-        if (free == -1) {
-            if (debugDue()) log("craft: no free slot to put the bone meal in");
+        // A grid left loaded is bone blocks that a death would drop, so emptying it wins over
+        // every reason not to run: the module being switched off, the quota being met, a
+        // container being open.
+        if (!cfg.craftBoneMeal.get() || enough) {
+            if (crafter.isLoaded()) {
+                crafter.unload(mc);
+                if (cfg.debug.get()) log("craft: done, grid emptied");
+                return true;
+            }
             return false;
         }
 
-        int made = BoneCrafter.craft(mc, SlotUtils.indexToId(blocks.slot()),
-            SlotUtils.indexToId(free), cfg.craftBatch.get());
+        FindItemResult blocks = InvUtils.find(Items.BONE_BLOCK);
+        if (!blocks.found() && !crafter.isLoaded()) return false;
+        if (!BoneCrafter.usable(mc)) return false;
 
-        craftTimer = cfg.craftDelay.get();
-
-        if (made > 0 && cfg.debug.get()) {
-            log("craft: %d bone block(s) -> %d bone meal", made, made * BoneCrafter.PER_BLOCK);
+        int deposit = depositSlot();
+        if (deposit == -1) {
+            if (crafter.isLoaded()) crafter.unload(mc);
+            else if (debugDue()) log("craft: no free slot to put the bone meal in");
+            return false;
         }
-        return made > 0;
+
+        int made = crafter.tick(mc,
+            blocks.found() ? SlotUtils.indexToId(blocks.slot()) : -1,
+            SlotUtils.indexToId(deposit),
+            cfg.craftSafe.get());
+
+        if (made > 0) {
+            craftTimer = cfg.craftDelay.get();
+            if (cfg.debug.get()) log("craft: 1 bone block -> %d bone meal", BoneCrafter.PER_BLOCK);
+        }
+        return made != 0;
     }
 
-    /** First empty slot in the hotbar or main inventory, or -1. */
-    private int firstEmptySlot() {
+    /**
+     * Where a finished craft should go.
+     *
+     * <p>An existing bone meal stack with room comes first, so repeated rounds pile into one
+     * slot instead of scattering nine at a time across the inventory.
+     */
+    private int depositSlot() {
+        for (int i = 0; i <= SlotUtils.MAIN_END; i++) {
+            ItemStack stack = mc.player.getInventory().getItem(i);
+            if (stack.is(Items.BONE_MEAL)
+                && stack.getCount() + BoneCrafter.PER_BLOCK <= stack.getMaxStackSize()) {
+                return i;
+            }
+        }
         for (int i = 0; i <= SlotUtils.MAIN_END; i++) {
             if (mc.player.getInventory().getItem(i).isEmpty()) return i;
         }
@@ -793,6 +827,40 @@ public class AutoMoss extends Module {
         }
 
         return patch().countConversions(x, y + 1, z, Integer.MAX_VALUE);
+    }
+
+    /**
+     * Whether moss that is already there would convert the same ground anyway.
+     *
+     * <p>Placing moss is for stone no existing patch can reach - an outcrop with nothing green
+     * near it, where turning one block into moss is the only way in. Next to moss that is
+     * already there it converts nothing new: the same columns were already covered, so the
+     * moss block is spent for nothing.
+     *
+     * <p>Two patches overlap when their origins are within twice the patch radius, so that is
+     * the distance searched. Moss under a layer of grass still counts when
+     * {@code clear-obstructions} is on, since the module can uncover it - and uncovering costs
+     * nothing where placing costs a block.
+     */
+    private boolean mossCouldServe(int x, int y, int z) {
+        int r = 2 * cfg.patchRadius.get();
+
+        for (int dy = -1; dy <= 1; dy++) {
+            for (int dx = -r; dx <= r; dx++) {
+                for (int dz = -r; dz <= r; dz++) {
+                    auxPos.set(x + dx, y + dy, z + dz);
+                    if (!mc.level.getBlockState(auxPos).is(Blocks.MOSS_BLOCK)) continue;
+
+                    auxPos.set(x + dx, y + dy + 1, z + dz);
+                    BlockState above = mc.level.getBlockState(auxPos);
+
+                    if (above.isAir()) return true;
+                    if (cfg.clearObstructions.get() && isClearable(auxPos, above)) return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     /** Whether a break or a place at this position is within the configured reach. */
