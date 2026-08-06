@@ -151,6 +151,8 @@ public class ElytraResupply extends Module {
     private int repairSettleUntil;
     /** True while spending supplies already carried, before any chest has been placed. */
     private boolean localPass;
+    /** Set when a run failed for want of supplies, which is its own reason to log out. */
+    private boolean stranded;
     /** Edge detection for the manual trigger key. */
     private boolean triggerHeld;
     /**
@@ -236,6 +238,7 @@ public class ElytraResupply extends Module {
         xpCheckAt = -1;
         repairSettleUntil = 0;
         localPass = false;
+        stranded = false;
         landTicks = 0;
 
         if (walkingToDrop) {
@@ -384,6 +387,24 @@ public class ElytraResupply extends Module {
             !cfg.silentRotations.get(), () -> { });
     }
 
+    /** Paces an occasional debug line without a counter of its own per call site. */
+    private boolean debugDue() {
+        return cfg.debug.get() && idleTicks++ % 40 == 0;
+    }
+
+    /** Horizontal distance to the destination, or infinity when there is none. */
+    private double distanceToTarget() {
+        if (resumeTarget == null || mc.player == null) return Double.POSITIVE_INFINITY;
+        double dx = mc.player.getX() - (resumeTarget.getX() + 0.5);
+        double dz = mc.player.getZ() - (resumeTarget.getZ() + 0.5);
+        return Math.sqrt(dx * dx + dz * dz);
+    }
+
+    /** Whether we are close enough to the destination to call the trip finished. */
+    private boolean arrived() {
+        return distanceToTarget() <= cfg.arrivalRadius.get();
+    }
+
     /** True on ticks where an action is allowed, so clicks are paced rather than instant. */
     private boolean ready() {
         int delay = cfg.actionDelay.get();
@@ -430,10 +451,14 @@ public class ElytraResupply extends Module {
         boolean lowFireworks = PlayerInv.count(mc, Items.FIREWORK_ROCKET) <= cfg.minFireworks.get();
         boolean equippedDamaged = PlayerInv.wornElytraDurability(mc) < cfg.minElytraDurability.get();
 
-        // Baritone only puts down when short on one of these; if neither is low it reached the
-        // goal and there is nothing to do here.
+        // Nothing is low, so there is no resupply to do. Whether the trip is over is a
+        // separate question: touching the ground is not arriving. Baritone puts down for
+        // terrain, an emergency, or because you took the controls back, and treating any of
+        // those as "done" logs you out in the middle of nowhere.
         if (!lowFireworks && !equippedDamaged) {
-            if (cfg.disconnectWhenDone.get()) to(Phase.WAIT_DISCONNECT);
+            if (cfg.disconnectWhenDone.get() && arrived()) to(Phase.WAIT_DISCONNECT);
+            else if (debugDue()) log("landed with nothing low, %s from the destination",
+                resumeTarget == null ? "no idea how far" : (int) distanceToTarget() + " blocks");
             return;
         }
 
@@ -553,12 +578,14 @@ public class ElytraResupply extends Module {
         if (cfg.requireSilkTouch.get() && PlayerInv.findSilkTouch(mc) == -1) {
             error("Low on supplies, but no Silk Touch pickaxe - not placing a chest.");
             resumeTarget = null;
+            stranded = true;
             if (cfg.disconnectWhenDone.get()) to(Phase.WAIT_DISCONNECT);
             return false;
         }
         if (!InvUtils.find(Items.ENDER_CHEST).found()) {
             error("Low on supplies, but no ender chest on me.");
             resumeTarget = null;
+            stranded = true;
             if (cfg.disconnectWhenDone.get()) to(Phase.WAIT_DISCONNECT);
             return false;
         }
@@ -933,6 +960,11 @@ public class ElytraResupply extends Module {
             return;
         }
 
+        // Paced like every other container step. Pushing a stack per tick is a burst the
+        // server has no time to answer, and each click after the first carries a state id it
+        // has already moved past.
+        if (!ready()) return;
+
         AbstractContainerMenu menu = mc.player.containerMenu;
 
         // Leftovers go back where they came from rather than riding along as dead weight.
@@ -1280,6 +1312,19 @@ public class ElytraResupply extends Module {
 
     private void waitAndDisconnect() {
         if (!mc.player.onGround()) return;
+
+        // Checked again here, not only where this phase was entered. Dropping the connection
+        // is the one thing in this module that cannot be undone, so it is worth being sure.
+        //
+        // Two reasons are good enough: the trip is actually finished, or it cannot continue
+        // for want of supplies, where logging out beats standing in the open unable to fly.
+        // Merely having touched the ground is neither.
+        if (!stranded && !arrived()) {
+            if (cfg.debug.get()) log("not disconnecting: landed, but not at the destination");
+            reset();
+            return;
+        }
+
         info("Trip ended; disconnecting from server.");
         var conn = mc.getConnection();
         if (conn != null) conn.getConnection().disconnect(

@@ -33,6 +33,7 @@ public final class ResupplySettings {
     public final Setting<Boolean> pauseOnKillAura;
     public final Setting<Boolean> debug;
     public final Setting<Boolean> disconnectWhenDone;
+    public final Setting<Double> arrivalRadius;
     public final Setting<Boolean> releaseOnInput;
     public final Setting<Boolean> silentRotations;
     public final Setting<Keybind> triggerKey;
@@ -176,6 +177,15 @@ public final class ResupplySettings {
             .name("disconnect-when-done")
             .description("Disconnect once the trip ends or when unable to continue (waits until landed).")
             .defaultValue(false)
+            .build());
+
+        arrivalRadius = sgGeneral.add(new DoubleSetting.Builder()
+            .name("arrival-radius")
+            .description("How close to the destination counts as having arrived. Only used to " +
+                         "decide whether a trip is finished; landing anywhere else is just a " +
+                         "landing.")
+            .defaultValue(150.0).min(8.0).max(2000.0).sliderRange(32.0, 512.0)
+            .visible(disconnectWhenDone::get)
             .build());
 
         releaseOnInput = sgGeneral.add(new BoolSetting.Builder()

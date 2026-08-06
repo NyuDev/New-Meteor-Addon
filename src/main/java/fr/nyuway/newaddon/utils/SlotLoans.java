@@ -59,7 +59,12 @@ public final class SlotLoans {
     }
 
     /**
-     * Puts one borrowed item back, newest first.
+     * Makes one move towards putting the borrowed items back, newest first.
+     *
+     * <p>The slot being returned to is often not free any more: freeing it is exactly what
+     * made it attractive to whatever the routine needed on the bar next, so the fireworks end
+     * up sitting where the sword was. Evicting that occupant is a move of its own, and the
+     * loan stays on the list until the original is actually home.
      *
      * @return true while there is still something to do, so a caller can spend a tick per move
      *         rather than firing a burst of clicks the server will not keep up with
@@ -70,17 +75,51 @@ public final class SlotLoans {
             return false;
         }
 
+        var inv = mc.player.getInventory();
+
         while (!loans.isEmpty()) {
-            Loan loan = loans.remove(loans.size() - 1);
+            Loan loan = loans.get(loans.size() - 1);
 
-            ItemStack now = mc.player.getInventory().getItem(loan.to());
-            if (now.isEmpty() || !now.is(loan.what())) continue;
-            if (!mc.player.getInventory().getItem(loan.from()).isEmpty()) continue;
+            ItemStack moved = inv.getItem(loan.to());
+            if (moved.isEmpty() || !moved.is(loan.what())) {
+                // Used up, or moved on by something else. Nothing to put back.
+                loans.remove(loans.size() - 1);
+                continue;
+            }
 
+            if (!inv.getItem(loan.from()).isEmpty()) {
+                int spot = spotFor(inv, loan.from());
+                if (spot == -1) {
+                    // Nowhere to evict to. Leaving the occupant beats shuffling blindly.
+                    loans.remove(loans.size() - 1);
+                    continue;
+                }
+                InvUtils.move().from(loan.from()).to(spot);
+                return true;
+            }
+
+            loans.remove(loans.size() - 1);
             InvUtils.move().from(loan.to()).to(loan.from());
             return true;
         }
 
         return false;
+    }
+
+    /**
+     * Somewhere to put whatever took a borrowed slot.
+     *
+     * <p>Another hotbar slot first: the usual occupant is the fireworks the routine just
+     * fetched, and Baritone can only fly with what is on the bar. The main inventory is the
+     * fallback.
+     */
+    private static int spotFor(net.minecraft.world.entity.player.Inventory inv, int avoid) {
+        for (int i = 0; i < 9; i++) {
+            if (i != avoid && inv.getItem(i).isEmpty()) return i;
+        }
+        for (int i = 9; i < 36; i++) {
+            if (inv.getItem(i).isEmpty()) return i;
+        }
+        return -1;
     }
 }
