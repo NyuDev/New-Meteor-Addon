@@ -67,6 +67,8 @@ public class ElytraResupply extends Module {
         RETURN_SUPPLIES, BREAK_SHULKER, RETURN_SHULKER, BREAK_CHEST,
         /** Putting borrowed hotbar slots back before letting go. */
         RESTORE_HOTBAR,
+        /** Walking off a spot that will not let us take off. */
+        REPOSITION,
         TAKEOFF, WAIT_DISCONNECT, RESUME
     }
 
@@ -85,11 +87,18 @@ public class ElytraResupply extends Module {
     /** Ticks of jump attempts before a stuck takeoff is given up rather than hopping forever. */
     private static final int TAKEOFF_GIVEUP = 60;
 
-    /** Failed takeoffs in a row before the module bows out and hands control back to the player. */
-    private static final int MAX_TAKEOFF_FAILURES = 3;
+    /**
+     * Failed takeoffs in a row before the module bows out and hands control back to the player.
+     * Each attempt now walks somewhere new first, so being patient costs a few seconds rather
+     * than hopping in the same hole.
+     */
+    private static final int MAX_TAKEOFF_FAILURES = 5;
 
     /** Baritone's terrain clearance for elytra paths; the only lever on how high it flies. */
     private static final String AVOIDANCE = "elytraMinimumAvoidance";
+
+    /** Ticks spent walking off a bad takeoff spot before trying again. */
+    private static final int REPOSITION_TICKS = 20 * 8;
 
     /** Ticks allowed to glide down after a mid-flight trigger before giving up. */
     private static final int LANDING_TIMEOUT = 20 * 60;
@@ -153,6 +162,8 @@ public class ElytraResupply extends Module {
     private boolean localPass;
     /** Set when a run failed for want of supplies, which is its own reason to log out. */
     private boolean stranded;
+    /** Ticks spent on the ground while a trip is unfinished, before relaunching. */
+    private int groundTicks;
     /** Edge detection for the manual trigger key. */
     private boolean triggerHeld;
     /**
@@ -240,6 +251,7 @@ public class ElytraResupply extends Module {
         localPass = false;
         stranded = false;
         landTicks = 0;
+        groundTicks = 0;
 
         if (walkingToDrop) {
             BaritoneBridge.cancel();
@@ -298,6 +310,12 @@ public class ElytraResupply extends Module {
         parkView();
 
         if (++phaseTicks > PHASE_TIMEOUT) {
+            if (phase == Phase.REPOSITION) {
+                // Its own clock decides when to stop walking.
+                phaseTicks = PHASE_TIMEOUT;
+                reposition();
+                return;
+            }
             if (phase == Phase.WAIT_DISCONNECT || phase == Phase.LAND) {
                 // Both of these wait on the ground arriving, which takes as long as it takes.
                 phaseTicks = PHASE_TIMEOUT;
@@ -325,6 +343,7 @@ public class ElytraResupply extends Module {
             case BREAK_CHEST -> breakAndCollect(chestPos, s -> s.is(Items.ENDER_CHEST), true,
                 Phase.RESTORE_HOTBAR);
             case RESTORE_HOTBAR -> restoreHotbar();
+            case REPOSITION -> reposition();
             case TAKEOFF -> takeoff();
             case WAIT_DISCONNECT -> waitAndDisconnect();
             case SWAP_ELYTRA -> swapElytra();
@@ -439,6 +458,7 @@ public class ElytraResupply extends Module {
         // Still airborne, whether or not the process admits to being active.
         if (elytraActive || !mc.player.onGround()) {
             elytraWasActive = true;
+            groundTicks = 0;
             return;
         }
         elytraWasActive = false;
@@ -456,11 +476,31 @@ public class ElytraResupply extends Module {
         // terrain, an emergency, or because you took the controls back, and treating any of
         // those as "done" logs you out in the middle of nowhere.
         if (!lowFireworks && !equippedDamaged) {
-            if (cfg.disconnectWhenDone.get() && arrived()) to(Phase.WAIT_DISCONNECT);
-            else if (debugDue()) log("landed with nothing low, %s from the destination",
+            if (cfg.disconnectWhenDone.get() && arrived()) {
+                to(Phase.WAIT_DISCONNECT);
+                return;
+            }
+
+            // Well short of the destination with nothing to fix: this is a landing that was
+            // not meant to happen - clipped terrain, an emergency put-down - and nothing else
+            // will undo it. Baritone's elytra process never takes off on its own.
+            if (cfg.autoRelaunch.get() && !arrived()) {
+                if (++groundTicks < cfg.relaunchDelay.get()) return;
+                groundTicks = 0;
+                info("Back in the air.");
+                if (cfg.debug.get()) {
+                    log("relaunching, %d blocks from the destination", (int) distanceToTarget());
+                }
+                to(Phase.TAKEOFF);
+                return;
+            }
+
+            if (debugDue()) log("landed with nothing low, %s from the destination",
                 resumeTarget == null ? "no idea how far" : (int) distanceToTarget() + " blocks");
             return;
         }
+
+        groundTicks = 0;
 
         beginRun(false);
     }
@@ -1100,6 +1140,27 @@ public class ElytraResupply extends Module {
         to(flyOn ? Phase.TAKEOFF : Phase.RESUME);
     }
 
+    /**
+     * Walks a little way towards the destination before trying to take off again.
+     *
+     * <p>A takeoff fails because of where it is being attempted: under an overhang, in a
+     * one-block hole, on a slope that eats the second jump. Moving is the only thing that
+     * changes the answer, and Baritone walking toward the destination moves us somewhere that
+     * is at least no further away.
+     */
+    private void reposition() {
+        if (phaseTicks == 1) {
+            BaritoneBridge.exploreTo(resumeTarget.getX(), resumeTarget.getZ());
+            if (cfg.debug.get()) log("walking toward the destination before retrying takeoff");
+        }
+
+        // Off the ground already - a slope did the work - or long enough walking.
+        if (!mc.player.onGround() || phaseTicks > REPOSITION_TICKS) {
+            BaritoneBridge.cancel();
+            to(Phase.TAKEOFF);
+        }
+    }
+
     private void takeoff() {
         if (mc.player.isFallFlying()) {
             mc.options.keyJump.setDown(false);
@@ -1137,6 +1198,16 @@ public class ElytraResupply extends Module {
                 toggle();
                 return;
             }
+
+            // Handing the route back was pointless: the elytra process does not take off from
+            // standing, so it just left us here. Walk out of whatever this spot is - a hole, a
+            // ceiling, a slope - and try again from somewhere else.
+            if (cfg.autoRelaunch.get() && resumeTarget != null) {
+                warning("Couldn't get airborne here; moving and trying again.");
+                to(Phase.REPOSITION);
+                return;
+            }
+
             warning("Couldn't get airborne here; handing the route back to Baritone.");
             to(Phase.RESUME);
             return;

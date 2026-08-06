@@ -193,6 +193,7 @@ the slot it came from → break the ender chest with Silk Touch → pick it up.
 | `fireworks-to-hotbar` | on | Put fireworks on the bar, where Baritone can actually use them. |
 | `trigger-key` | unbound | Start a resupply on the spot, while the module is on. |
 | `arrival-radius` | 150 | How close to the destination counts as arrived, for `disconnect-when-done`. |
+| `auto-relaunch` / `relaunch-delay` | on / 30 | Get airborne again after an accidental landing short of the destination. |
 | `use-carried-first` | on | Spend what you already have before opening anything. |
 | `empty-hand-to-open` | on | Hold an empty slot to open a container; some servers require it. |
 | `look-down` | off | Point at the ground when nothing else needs looking at. |

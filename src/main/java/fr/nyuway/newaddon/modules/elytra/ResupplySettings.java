@@ -34,6 +34,8 @@ public final class ResupplySettings {
     public final Setting<Boolean> debug;
     public final Setting<Boolean> disconnectWhenDone;
     public final Setting<Double> arrivalRadius;
+    public final Setting<Boolean> autoRelaunch;
+    public final Setting<Integer> relaunchDelay;
     public final Setting<Boolean> releaseOnInput;
     public final Setting<Boolean> silentRotations;
     public final Setting<Keybind> triggerKey;
@@ -186,6 +188,22 @@ public final class ResupplySettings {
                          "landing.")
             .defaultValue(150.0).min(8.0).max(2000.0).sliderRange(32.0, 512.0)
             .visible(disconnectWhenDone::get)
+            .build());
+
+        autoRelaunch = sgGeneral.add(new BoolSetting.Builder()
+            .name("auto-relaunch")
+            .description("Get back in the air when you end up on the ground short of the " +
+                         "destination. Baritone's elytra process does not take off by itself, " +
+                         "so an accidental landing otherwise just leaves you standing there.")
+            .defaultValue(true)
+            .build());
+
+        relaunchDelay = sgGeneral.add(new IntSetting.Builder()
+            .name("relaunch-delay")
+            .description("Ticks on the ground before relaunching. Long enough that clipping a " +
+                         "block mid-flight is not mistaken for having landed.")
+            .defaultValue(30).min(5).max(200).sliderRange(10, 100)
+            .visible(autoRelaunch::get)
             .build());
 
         releaseOnInput = sgGeneral.add(new BoolSetting.Builder()
