@@ -125,6 +125,18 @@ public final class PlayerInv {
      * @return true when a slot is free, either already or after the move
      */
     public static boolean freeHotbarSlot(Minecraft mc) {
+        return freeHotbarSlot(mc, null);
+    }
+
+    /**
+     * Frees a hotbar slot, pushing whatever is in it down into the inventory.
+     *
+     * @param loans where to record the displacement, so it can be undone later. Whatever gets
+     *              pushed down is the player's sword or bow, in the place their hands know;
+     *              borrowing the slot without writing down where it went is how a routine that
+     *              leaves no trace on the ground still leaves the hotbar rearranged.
+     */
+    public static boolean freeHotbarSlot(Minecraft mc, SlotLoans loans) {
         var inv = mc.player.getInventory();
         if (firstEmptyHotbarSlot(mc) != -1) return true;
 
@@ -137,6 +149,7 @@ public final class PlayerInv {
             for (int j = HOTBAR_SIZE; j < MAIN_SIZE; j++) {
                 if (inv.getItem(j).isEmpty()) {
                     InvUtils.move().fromHotbar(i).to(j);
+                    if (loans != null) loans.record(mc, i, j);
                     return true;
                 }
             }

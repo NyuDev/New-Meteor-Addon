@@ -9,7 +9,9 @@ import fr.nyuway.newaddon.utils.Enchants;
 import fr.nyuway.newaddon.utils.Interactions;
 import fr.nyuway.newaddon.utils.PlayerInv;
 import fr.nyuway.newaddon.utils.ShulkerContents;
+import fr.nyuway.newaddon.utils.SlotLoans;
 import fr.nyuway.newaddon.utils.SpotFinder;
+import fr.nyuway.newaddon.utils.Unstuck;
 import meteordevelopment.meteorclient.events.world.TickEvent;
 import meteordevelopment.meteorclient.settings.Setting;
 import meteordevelopment.meteorclient.systems.modules.Module;
@@ -64,6 +66,8 @@ public class ElytraResupply extends Module {
         PLACE_CHEST, OPEN_CHEST, TAKE_SHULKER, PLACE_SHULKER, OPEN_SHULKER, TAKE_SUPPLIES,
         REPAIR, SWAP_ELYTRA,
         RETURN_SUPPLIES, BREAK_SHULKER, RETURN_SHULKER, BREAK_CHEST,
+        /** Putting borrowed hotbar slots back before letting go. */
+        RESTORE_HOTBAR,
         TAKEOFF, WAIT_DISCONNECT, RESUME
     }
 
@@ -157,6 +161,10 @@ public class ElytraResupply extends Module {
     private int landTicks;
     /** Baritone's own clearance before we raised it, so it can be handed back untouched. */
     private Double savedAvoidance;
+    /** Hotbar slots borrowed for the routine, to be handed back before it lets go. */
+    private final SlotLoans loans = new SlotLoans();
+    /** Scratch position for the stuck check, so a per-tick test allocates nothing. */
+    private final BlockPos.MutableBlockPos unstickCursor = new BlockPos.MutableBlockPos();
     private int ticks;
 
     public ElytraResupply() {
@@ -167,6 +175,7 @@ public class ElytraResupply extends Module {
     @Override
     public void onActivate() {
         reset();
+        loans.clear();
         takeoffFailures = 0;
         applyEndCruise();
         if (!BaritoneBridge.isPresent()) {
@@ -176,6 +185,14 @@ public class ElytraResupply extends Module {
 
     @Override
     public void onDeactivate() {
+        // Last chance to hand the hotbar back. Normally this is paced a move per tick, but a
+        // module being switched off has no next tick, and a burst of clicks that might get
+        // resynced still beats leaving someone's sword in the wrong slot.
+        for (int i = 0; i <= PlayerInv.HOTBAR_SIZE && loans.restoreOne(mc); i++) {
+            // restoreOne does the work; the bound just stops a broken state looping.
+        }
+        loans.clear();
+
         reset();
         restoreEndCruise();
     }
@@ -321,7 +338,8 @@ public class ElytraResupply extends Module {
             case BREAK_SHULKER -> breakAndCollect(shulkerPos, Containers::isShulker, false, Phase.RETURN_SHULKER);
             case RETURN_SHULKER -> returnShulker();
             case BREAK_CHEST -> breakAndCollect(chestPos, s -> s.is(Items.ENDER_CHEST), true,
-                cfg.autoTakeoff.get() ? Phase.TAKEOFF : Phase.RESUME);
+                Phase.RESTORE_HOTBAR);
+            case RESTORE_HOTBAR -> restoreHotbar();
             case TAKEOFF -> takeoff();
             case WAIT_DISCONNECT -> waitAndDisconnect();
             case SWAP_ELYTRA -> swapElytra();
@@ -586,7 +604,7 @@ public class ElytraResupply extends Module {
         if (!chest.found()) {
             // Bring it down to the hotbar first; BlockUtils.place needs it there.
             if (!PlayerInv.moveToHotbar(mc, s -> s.is(Items.ENDER_CHEST))) {
-                if (PlayerInv.freeHotbarSlot(mc)) return;
+                if (PlayerInv.freeHotbarSlot(mc, loans)) return;
                 error("Could not get the ender chest into the hotbar.");
                 abort();
             }
@@ -639,7 +657,7 @@ public class ElytraResupply extends Module {
         }
 
         // Nothing spare: clear a slot, then come back for it on a later tick.
-        if (!PlayerInv.freeHotbarSlot(mc) && cfg.debug.get()) {
+        if (!PlayerInv.freeHotbarSlot(mc, loans) && cfg.debug.get()) {
             log("could not free a hotbar slot to open empty handed");
         }
         return false;
@@ -719,7 +737,7 @@ public class ElytraResupply extends Module {
         if (!shulker.found()) {
             if (!PlayerInv.moveToHotbar(mc, this::isWantedShulker)) {
                 // Hotbar is likely packed with fireworks; open a slot and retry next tick.
-                if (PlayerInv.freeHotbarSlot(mc)) return;
+                if (PlayerInv.freeHotbarSlot(mc, loans)) return;
                 error("Could not get the shulker into the hotbar.");
                 abort();
             }
@@ -908,7 +926,7 @@ public class ElytraResupply extends Module {
             needFireworks = false;
             needMending = false;
             anchor = null;
-            to(cfg.autoTakeoff.get() ? Phase.TAKEOFF : Phase.RESUME);
+            to(Phase.RESTORE_HOTBAR);
             return;
         }
 
@@ -1049,11 +1067,42 @@ public class ElytraResupply extends Module {
      * vanilla's own code sends the start-fall-flying packet and the server agrees we are
      * gliding. Setting the flag client-side would only desync.
      */
+    /**
+     * Gives back every hotbar slot the routine borrowed, one move per tick.
+     *
+     * <p>Paced rather than done in a burst: these are container clicks, and a burst of them
+     * arrives with a stale state id and gets answered with a resync that undoes the lot.
+     */
+    private void restoreHotbar() {
+        if (!ready()) return;
+
+        if (loans.restoreOne(mc)) return;
+
+        if (cfg.debug.get()) log("hotbar handed back");
+
+        // No destination means there is no flight to get back to, so jumping would be for
+        // nothing; RESUME simply tidies up and stops.
+        boolean flyOn = resumeTarget != null && cfg.autoTakeoff.get();
+        to(flyOn ? Phase.TAKEOFF : Phase.RESUME);
+    }
+
     private void takeoff() {
         if (mc.player.isFallFlying()) {
             mc.options.keyJump.setDown(false);
             takeoffFailures = 0;
             to(Phase.RESUME);
+            return;
+        }
+
+        // A block closed around us - a landing inside terrain, or something placed where we
+        // stand. No amount of jumping gets out of that, so dig first and come back to it. The
+        // attempt clock is held back so the digging does not eat the takeoff's patience.
+        BlockPos trap = Unstuck.find(mc, unstickCursor);
+        if (trap != null) {
+            mc.options.keyJump.setDown(false);
+            if (phaseTicks % 20 == 1 && cfg.debug.get()) log("stuck at takeoff, breaking free");
+            Interactions.mine(mc, trap, cfg.silentRotations.get(), true);
+            phaseTicks = 1;
             return;
         }
 
@@ -1079,14 +1128,23 @@ public class ElytraResupply extends Module {
             return;
         }
 
-        // Cycle the jump sequence; if still grounded after a full attempt, restart automatically.
+        // Cycle the jump sequence. Landing again part-way through is normal - a clipped block,
+        // a slope - and the only thing missing at that point is the second jump, so the cycle
+        // simply restarts rather than counting the trip as failed.
         int tick = phaseTicks % 20;
-        if (phaseTicks >= 20 && tick == 0 && mc.player.onGround()) {
-            if (cfg.debug.get()) log("Still on ground after jump attempt; retrying takeoff.");
+        if (phaseTicks >= 20 && tick == 0 && mc.player.onGround() && cfg.debug.get()) {
+            log("back on the ground; jumping again");
         }
-        if (tick < 3) mc.options.keyJump.setDown(true);
-        else if (tick < 6) mc.options.keyJump.setDown(false);
-        else mc.options.keyJump.setDown(!mc.player.onGround());
+
+        if (tick < 3) {
+            mc.options.keyJump.setDown(true);
+        } else if (tick < 6) {
+            mc.options.keyJump.setDown(false);
+        } else {
+            // Airborne: this press is the second jump that starts the glide. Grounded: we came
+            // back down, so hold off and let the next cycle start the sequence over.
+            mc.options.keyJump.setDown(!mc.player.onGround());
+        }
     }
 
     private void resume() {
@@ -1132,11 +1190,16 @@ public class ElytraResupply extends Module {
         }
 
         if (resumeTarget != null) {
-            to(cfg.autoTakeoff.get() ? Phase.TAKEOFF : Phase.RESUME);
+            to(Phase.RESTORE_HOTBAR);
             return;
         }
         if (cfg.disconnectWhenDone.get()) {
             to(Phase.WAIT_DISCONNECT);
+            return;
+        }
+        // Even a run that ended with nothing to resume owes the hotbar back.
+        if (!loans.isEmpty()) {
+            to(Phase.RESTORE_HOTBAR);
             return;
         }
         reset();
