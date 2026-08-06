@@ -140,9 +140,23 @@ public class StasisProtection extends Module {
         .defaultValue(true)
         .build());
 
+    private final Setting<Boolean> debug = sgDetection.add(new BoolSetting.Builder()
+        .name("debug")
+        .description("Write distances, names and decisions to the game log. Chat stays vague " +
+                     "on purpose; this is where the detail goes when you need it.")
+        .defaultValue(false)
+        .build());
+
     /** Where we were last tick, and in which world, so a teleport can be told from walking. */
     private double lastX, lastY, lastZ;
     private Level lastLevel;
+    /**
+     * The player object we measured against. Respawning replaces it - {@code handleRespawn}
+     * calls {@code createPlayer} and assigns {@code Minecraft.player} - so a change here is
+     * proof of a death or a dimension change, and the jump that follows is not a teleport
+     * anyone did to us.
+     */
+    private Object lastPlayer;
     private boolean seeded;
 
     private int ticks;
@@ -165,6 +179,7 @@ public class StasisProtection extends Module {
         pearlGraceUntil = -1;
         seeded = false;
         lastLevel = null;
+        lastPlayer = null;
 
         if (reaction.get() == Reaction.Pull && !Modules.get().get(StasisPull.class).isConfigured()) {
             warning("StasisPull is not configured; an ambush would be detected but not answered.");
@@ -203,11 +218,16 @@ public class StasisProtection extends Module {
         if (mc.player == null || mc.level == null) return;
         ticks++;
 
-        // A new world means a dimension change, a respawn or a reconnect. Position deltas
-        // across that are meaningless, so start over rather than cry teleport.
-        if (mc.level != lastLevel) {
+        // A new world or a new player object means a dimension change, a death or a
+        // reconnect. Position deltas across any of those are meaningless: a respawn moves you
+        // to your bed and a portal moves you to another world, and neither is something
+        // someone did to you. Start over rather than cry teleport.
+        if (mc.level != lastLevel || mc.player != lastPlayer) {
             lastLevel = mc.level;
+            lastPlayer = mc.player;
             seeded = false;
+            // A death also settles any pearl that was still in the air.
+            pearlGraceUntil = -1;
         }
 
         double x = mc.player.getX(), y = mc.player.getY(), z = mc.player.getZ();
@@ -228,15 +248,18 @@ public class StasisProtection extends Module {
         if (watchUntil != -1) {
             if (ticks > watchUntil) {
                 watchUntil = -1;
-                if (notify.get() && !consented) info("Nobody turned up. Staying put.");
+                if (notify.get() && !consented) info("Nobody turned up.");
                 return;
             }
 
             Player threat = findThreat();
             if (threat != null) {
                 watchUntil = -1;
-                react(threat.getName().getString() + " is "
-                    + String.format("%.1f", mc.player.distanceTo(threat)) + " blocks away");
+                if (debug.get()) {
+                    log("threat %s at %.1f blocks", threat.getName().getString(),
+                        mc.player.distanceTo(threat));
+                }
+                react("someone is here who is not a friend");
             }
         }
     }
@@ -244,14 +267,17 @@ public class StasisProtection extends Module {
     private void onTeleported(double distance) {
         consented = isConsented();
 
+        if (debug.get()) log("teleport of %.0f blocks, consented=%s", distance, consented);
+
         if (consented) {
-            if (notify.get()) info("Teleported %.0f blocks - consented, ignoring.", distance);
             watchUntil = -1;
             return;
         }
 
         watchUntil = ticks + (int) Math.round(watchSeconds.get() * 20.0);
-        if (notify.get()) warning("Unrequested teleport, %.0f blocks. Checking who is here.", distance);
+        // Deliberately says nothing about where or how far. Chat is public if you are
+        // streaming or screenshotting, and a distance is most of a coordinate.
+        if (notify.get()) warning("Unrequested teleport. Checking.");
     }
 
     /**
@@ -300,6 +326,7 @@ public class StasisProtection extends Module {
 
     private void react(String reason) {
         warning("Ambush: %s.", reason);
+        if (debug.get()) log("reacting with %s", reaction.get());
 
         if (reaction.get() == Reaction.Pull) {
             // StasisPull records the request, so the teleport it causes is trusted and
@@ -308,6 +335,10 @@ public class StasisProtection extends Module {
         } else {
             disconnect(reason);
         }
+    }
+
+    private void log(String fmt, Object... args) {
+        NewAddon.LOG.info("[StasisProtection] " + String.format(fmt, args));
     }
 
     private void disconnect(String reason) {

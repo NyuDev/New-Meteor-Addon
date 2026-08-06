@@ -82,6 +82,18 @@ public class ElytraResupply extends Module {
     /** Failed takeoffs in a row before the module bows out and hands control back to the player. */
     private static final int MAX_TAKEOFF_FAILURES = 3;
 
+    /** How far off the setup block counts as having been pushed rather than having stepped. */
+    private static final double PUSH_TOLERANCE = 1.6;
+
+    /** Rotation priority for the idle downward look: below every interaction here. */
+    private static final int PARK_PRIORITY = 10;
+
+    /** Ticks after a bottle before its effect is read off the XP bar. */
+    private static final int XP_READ_DELAY = 8;
+
+    /** Ticks to let an elytra swap settle once XP was seen going to the bar instead. */
+    private static final int XP_SETTLE = 20;
+
     private final ResupplySettings cfg = new ResupplySettings(settings);
 
     private Phase phase = Phase.IDLE;
@@ -117,6 +129,18 @@ public class ElytraResupply extends Module {
     private Item wantedShulkerItem;
     /** False during the mending pass (bottles + repair), true once we move on to fireworks. */
     private boolean gatheringFireworks;
+
+    /** Block the routine set up on, so being shoved off it can be undone. */
+    private BlockPos anchor;
+    /** Total XP when the last bottle was thrown, and the tick to read it back on. */
+    private int xpSnapshot = -1;
+    private int xpCheckAt = -1;
+    /** phaseTicks before which no further bottle is thrown, while a swap settles. */
+    private int repairSettleUntil;
+    /** True while spending supplies already carried, before any chest has been placed. */
+    private boolean localPass;
+    /** Edge detection for the manual trigger key. */
+    private boolean triggerHeld;
 
     public ElytraResupply() {
         super(NewAddon.CATEGORY, "elytra-resupply",
@@ -154,6 +178,11 @@ public class ElytraResupply extends Module {
         triedShulkerSlots.clear();
         wantedShulkerItem = null;
         gatheringFireworks = false;
+        anchor = null;
+        xpSnapshot = -1;
+        xpCheckAt = -1;
+        repairSettleUntil = 0;
+        localPass = false;
 
         if (walkingToDrop) {
             BaritoneBridge.cancel();
@@ -185,7 +214,7 @@ public class ElytraResupply extends Module {
         // The moment the player grabs the controls mid-routine, bow out entirely and give the
         // controls back. Scoped to an active routine so ordinary flight is left alone.
         if (cfg.releaseOnInput.get() && phase != Phase.IDLE && manualMovementRequested()) {
-            info("Manual input detected - releasing control.");
+            info("Releasing control.");
             toggle();
             return;
         }
@@ -198,17 +227,26 @@ public class ElytraResupply extends Module {
             return;
         }
 
+        if (manualTriggerPressed() && phase == Phase.IDLE) {
+            beginRun(true);
+            return;
+        }
+
         if (phase == Phase.IDLE) {
             watchForLanding();
             return;
         }
+
+        holdPosition();
+        parkView();
 
         if (++phaseTicks > PHASE_TIMEOUT) {
             if (phase == Phase.WAIT_DISCONNECT) {
                 phaseTicks = PHASE_TIMEOUT; // keep waiting until landed
                 return;
             }
-            warning("Phase %s timed out; cleaning up.", phase);
+            warning("Timed out; cleaning up.");
+            if (cfg.debug.get()) log("phase %s timed out", phase);
             abort();
             return;
         }
@@ -232,6 +270,55 @@ public class ElytraResupply extends Module {
             case RESUME -> resume();
             default -> { }
         }
+    }
+
+    /**
+     * Rising edge of the trigger key.
+     *
+     * <p>Polled rather than driven by a key event so it costs nothing when unbound, and so it
+     * can only ever fire while this module is the one ticking - a bind that did something with
+     * the module switched off would be a surprise.
+     */
+    private boolean manualTriggerPressed() {
+        boolean down = cfg.triggerKey.get().isSet() && cfg.triggerKey.get().isPressed();
+        boolean fired = down && !triggerHeld;
+        triggerHeld = down;
+        return fired;
+    }
+
+    /**
+     * Walks back to the block the routine set up on.
+     *
+     * <p>An enderman or a piston can shove you a couple of blocks while a container is open,
+     * and every position the routine remembers - the chest, the shulker, the spot it checked
+     * for headroom - is measured from where it started. The anchor is only ever set at the
+     * start of a run and cleared with it, so the routine's own walking (chasing a dropped
+     * item) never fights this.
+     */
+    private void holdPosition() {
+        if (!cfg.holdPosition.get() || anchor == null || walkingToDrop) return;
+
+        double dx = mc.player.getX() - (anchor.getX() + 0.5);
+        double dz = mc.player.getZ() - (anchor.getZ() + 0.5);
+        if (dx * dx + dz * dz < PUSH_TOLERANCE * PUSH_TOLERANCE) return;
+
+        if (phaseTicks % 20 != 0) return;
+        if (cfg.debug.get()) log("pushed off the setup spot, walking back");
+        BaritoneBridge.pathTo(anchor, 0);
+    }
+
+    /**
+     * Points at the ground when nothing else wants the view.
+     *
+     * <p>Meteor's rotation system takes the highest priority asked for in a tick, so this sits
+     * well below every interaction and simply fills the gaps. In the End those gaps are what
+     * decides whether a resupply is quiet: looking at an enderman is the whole of the crime.
+     */
+    private void parkView() {
+        if (!cfg.lookDown.get()) return;
+
+        Rotations.rotate(mc.player.getYRot(), 90.0f, PARK_PRIORITY,
+            !cfg.silentRotations.get(), () -> { });
     }
 
     /** True on ticks where an action is allowed, so clicks are paced rather than instant. */
@@ -287,27 +374,69 @@ public class ElytraResupply extends Module {
             return;
         }
 
-        // One setup, everything fixed: top fireworks back up to target and mend every elytra we
-        // carry - not just whichever shortage tripped the landing.
+        beginRun(false);
+    }
+
+    /**
+     * Starts a resupply, from a landing or from the trigger key.
+     *
+     * <p>Carried supplies are spent first when {@code use-carried-first} is on. A bag that
+     * still holds XP bottles can often finish the mending on its own, and then no ender chest
+     * is placed, nothing is broken, and nothing is left behind to find - which is the whole
+     * point of the module. Only what is still missing afterwards is worth opening storage for.
+     */
+    private void beginRun(boolean manual) {
         needFireworks = PlayerInv.count(mc, Items.FIREWORK_ROCKET) < cfg.targetFireworks.get();
-        needMending = equippedDamaged || PlayerInv.findDamagedMendingElytra(mc) != -1;
+        needMending = PlayerInv.wornElytraDurability(mc) < cfg.minElytraDurability.get()
+            || PlayerInv.findDamagedMendingElytra(mc) != -1;
         needElytraSwap = PlayerInv.wornElytraDurability(mc) <= 0;
 
-        if (cfg.requireSilkTouch.get() && PlayerInv.findSilkTouch(mc) == -1) {
-            error("Landed and low on supplies, but no Silk Touch pickaxe - not placing a chest.");
-            resumeTarget = null;
-            if (cfg.disconnectWhenDone.get()) to(Phase.WAIT_DISCONNECT);
-            return;
-        }
-        if (!InvUtils.find(Items.ENDER_CHEST).found()) {
-            error("Landed and low on supplies, but no ender chest on me.");
-            resumeTarget = null;
-            if (cfg.disconnectWhenDone.get()) to(Phase.WAIT_DISCONNECT);
+        if (manual && !needFireworks && !needMending) {
+            info("Nothing to resupply.");
             return;
         }
 
-        info("Landed short. Resupplying (fireworks=%s, mending=%s).", needFireworks, needMending);
+        anchor = mc.player.blockPosition();
+        if (cfg.debug.get()) {
+            log("run starting at %s (manual=%s fireworks=%s mending=%s)",
+                anchor, manual, needFireworks, needMending);
+        }
+
+        // Mend with what is already on us before opening anything.
+        if (cfg.useCarriedFirst.get() && needMending
+            && PlayerInv.count(mc, Items.EXPERIENCE_BOTTLE) > 0) {
+            localPass = true;
+            info("Resupplying.");
+            to(Phase.REPAIR);
+            return;
+        }
+
+        if (!openStorageAllowed()) return;
+
+        info("Resupplying.");
         to(Phase.PLACE_CHEST);
+    }
+
+    /**
+     * Whether a chest run can go ahead at all, complaining once if not.
+     *
+     * <p>Deliberately says nothing about where anything is: chat is public the moment you
+     * screenshot it, and this module runs in places you would rather not have pinned down.
+     */
+    private boolean openStorageAllowed() {
+        if (cfg.requireSilkTouch.get() && PlayerInv.findSilkTouch(mc) == -1) {
+            error("Low on supplies, but no Silk Touch pickaxe - not placing a chest.");
+            resumeTarget = null;
+            if (cfg.disconnectWhenDone.get()) to(Phase.WAIT_DISCONNECT);
+            return false;
+        }
+        if (!InvUtils.find(Items.ENDER_CHEST).found()) {
+            error("Low on supplies, but no ender chest on me.");
+            resumeTarget = null;
+            if (cfg.disconnectWhenDone.get()) to(Phase.WAIT_DISCONNECT);
+            return false;
+        }
+        return true;
     }
 
     // --- phases -------------------------------------------------------------
@@ -316,7 +445,7 @@ public class ElytraResupply extends Module {
         if (chestPos == null) {
             chestPos = new SpotFinder(mc, cfg.searchRadius.get(), cfg.voidClearance.get(), chestPos, shulkerPos).find(false);
             if (chestPos == null) {
-                error("Nowhere safe to place; need solid ground with headroom.");
+                error("Nowhere safe to set up here.");
                 abort();
                 return;
             }
@@ -358,9 +487,36 @@ public class ElytraResupply extends Module {
         // Only knock once every few ticks: the server needs time to answer.
         if (phaseTicks % 10 != 1) return;
 
+        // An empty hand first. A held item turns the right-click into a use of that item, and
+        // servers that check for it refuse the open outright rather than quietly doing both.
+        if (cfg.emptyHandToOpen.get() && !emptyHand()) return;
+
         // Faces the block first. Opening a container the server thinks we are not looking at
         // is one of the plainest anticheat flags there is.
         Interactions.interact(mc, pos, cfg.silentRotations.get(), true);
+    }
+
+    /**
+     * Puts an empty slot in hand, making one if the hotbar is full.
+     *
+     * @return true once the hand really is empty; false while still arranging it
+     */
+    private boolean emptyHand() {
+        if (mc.player.getMainHandItem().isEmpty()) return true;
+
+        int empty = PlayerInv.firstEmptyHotbarSlot(mc);
+        if (empty != -1) {
+            // Through InvUtils: the selected-slot field was renamed between the versions this
+            // builds for, and its swap also syncs the choice to the server.
+            InvUtils.swap(empty, false);
+            return mc.player.getMainHandItem().isEmpty();
+        }
+
+        // Nothing spare: clear a slot, then come back for it on a later tick.
+        if (!PlayerInv.freeHotbarSlot(mc) && cfg.debug.get()) {
+            log("could not free a hotbar slot to open empty handed");
+        }
+        return false;
     }
 
     private void takeShulker() {
@@ -394,9 +550,9 @@ public class ElytraResupply extends Module {
                 return;
             }
             if (Containers.findInContainer(menu, Containers::isShulker) == -1) {
-                error("Ender chest has items but no shulker box in it.");
+                error("No shulker box in the ender chest.");
             } else {
-                error("No shulker in ender chest contains fireworks, XP bottles, or spare elytras.");
+                error("No shulker here has what I need.");
             }
             abort();
             return;
@@ -422,7 +578,7 @@ public class ElytraResupply extends Module {
         if (shulkerPos == null) {
             shulkerPos = new SpotFinder(mc, cfg.searchRadius.get(), cfg.voidClearance.get(), chestPos, shulkerPos).find(true);
             if (shulkerPos == null) {
-                error("Nowhere safe to place the shulker.");
+                error("Nowhere safe to put the shulker.");
                 abort();
                 return;
             }
@@ -518,15 +674,15 @@ public class ElytraResupply extends Module {
             int damaged = PlayerInv.findDamagedMendingElytra(mc);
             if (damaged != -1 && PlayerInv.count(mc, Items.EXPERIENCE_BOTTLE) > 0) {
                 swapEquippedWithInventorySlot(damaged);
-                info("Swapping in a Mending elytra to repair.");
+                if (cfg.debug.get()) log("swapping in a Mending elytra to repair");
                 phaseTicks = 0;
+                repairSettleUntil = XP_SETTLE;
+                xpCheckAt = -1;
                 return;
             }
             if (!equippedIsElytra) warning("No elytra equipped; nothing to repair.");
             else if (!equippedMends) warning("Equipped elytra lacks Mending; cannot repair with XP.");
-            // Nothing to mend with here; move on to the fireworks pass.
-            beginFireworksPass();
-            to(Phase.RETURN_SUPPLIES);
+            afterRepair();
             return;
         }
 
@@ -534,29 +690,51 @@ public class ElytraResupply extends Module {
             int damaged = PlayerInv.findDamagedMendingElytra(mc);
             if (damaged != -1 && PlayerInv.count(mc, Items.EXPERIENCE_BOTTLE) > 0) {
                 swapEquippedWithInventorySlot(damaged);
-                info("Elytra full; swapping in a damaged spare.");
+                if (cfg.debug.get()) log("elytra full, swapping in a damaged spare");
                 phaseTicks = 0;
+                repairSettleUntil = XP_SETTLE;
+                xpCheckAt = -1;
                 return;
             }
-            info("All elytras fully mended.");
-            // Repair fully done — now the fireworks pass may run.
-            beginFireworksPass();
-            to(Phase.RETURN_SUPPLIES);
+            info("Elytras mended.");
+            afterRepair();
             return;
         }
 
         FindItemResult bottle = InvUtils.findInHotbar(Items.EXPERIENCE_BOTTLE);
         if (!bottle.found()) {
             if (!PlayerInv.moveToHotbar(mc, s -> s.is(Items.EXPERIENCE_BOTTLE))) {
-                warning("Out of XP bottles; some elytras may still be damaged.");
-                // No bottles left; give up mending and move on to fireworks.
-                beginFireworksPass();
-                to(PlayerInv.findSpareElytra(mc) != -1 ? Phase.SWAP_ELYTRA : Phase.RETURN_SUPPLIES);
+                warning("Out of XP bottles.");
+                if (localPass) afterRepair();
+                else {
+                    beginFireworksPass();
+                    to(PlayerInv.findSpareElytra(mc) != -1
+                        ? Phase.SWAP_ELYTRA : Phase.RETURN_SUPPLIES);
+                }
             }
             return;
         }
 
+        // A bottle thrown at a swap that has not landed yet is a bottle wasted: the orbs go
+        // to the bar instead of the elytra. Read the bar back a moment after each throw and,
+        // if it moved while the elytra is still damaged, wait for the swap to settle.
+        if (xpCheckAt != -1 && phaseTicks >= xpCheckAt) {
+            int now = totalXp();
+            xpCheckAt = -1;
+            if (now > xpSnapshot) {
+                repairSettleUntil = phaseTicks + XP_SETTLE;
+                if (cfg.debug.get()) {
+                    log("xp went to the bar (%d -> %d) with the elytra still damaged; settling",
+                        xpSnapshot, now);
+                }
+            }
+        }
+
+        if (phaseTicks < repairSettleUntil) return;
         if (phaseTicks % 4 != 1) return;
+
+        xpSnapshot = totalXp();
+        xpCheckAt = phaseTicks + XP_READ_DELAY;
 
         // Straight down, or the bottle sails off and the orbs land somewhere else.
         Rotations.rotate(mc.player.getYRot(), 90.0f, 50, () -> {
@@ -564,6 +742,58 @@ public class ElytraResupply extends Module {
             mc.gameMode.useItem(mc.player, InteractionHand.MAIN_HAND);
             InvUtils.swapBack();
         });
+    }
+
+    /**
+     * Experience as one number, so a gain is comparable across a level boundary.
+     *
+     * <p>{@code totalExperience} alone is not enough: the client only refreshes it from the
+     * server, while the level and the progress bar move as orbs arrive.
+     */
+    private int totalXp() {
+        return mc.player.experienceLevel * 1000
+            + Math.round(mc.player.experienceProgress * 1000.0f);
+    }
+
+    /**
+     * Where the repair phase goes next.
+     *
+     * <p>On a carried-supplies pass there is no chest open and nothing placed, so the run can
+     * simply stop if what is left on us is enough. Only a shortage that carried supplies could
+     * not cover is worth setting up storage for.
+     */
+    private void afterRepair() {
+        if (!localPass) {
+            beginFireworksPass();
+            to(Phase.RETURN_SUPPLIES);
+            return;
+        }
+
+        localPass = false;
+
+        boolean shortFireworks = PlayerInv.count(mc, Items.FIREWORK_ROCKET) < cfg.targetFireworks.get();
+        boolean stillDamaged = PlayerInv.wornElytraDurability(mc) < cfg.minElytraDurability.get()
+            || PlayerInv.findDamagedMendingElytra(mc) != -1;
+        boolean canMendOnHand = PlayerInv.count(mc, Items.EXPERIENCE_BOTTLE) > 0;
+
+        if (!shortFireworks && !(stillDamaged && !canMendOnHand)) {
+            info("Done from what I was carrying.");
+            if (cfg.debug.get()) log("carried pass covered everything, no chest placed");
+            needFireworks = false;
+            needMending = false;
+            anchor = null;
+            to(cfg.autoTakeoff.get() ? Phase.TAKEOFF : Phase.RESUME);
+            return;
+        }
+
+        needFireworks = shortFireworks;
+        needMending = stillDamaged;
+
+        if (!openStorageAllowed()) {
+            abort();
+            return;
+        }
+        to(Phase.PLACE_CHEST);
     }
 
     private void returnSupplies() {

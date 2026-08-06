@@ -66,8 +66,16 @@ public class StasisPull extends Module {
 
     private final Setting<Boolean> notify = sgGeneral.add(new BoolSetting.Builder()
         .name("notify")
-        .description("Print what was sent, and what the bot answered, to your own chat.")
+        .description("Say in your own chat that a pull was requested. Deliberately does not " +
+                     "print the trigger word or the bot name: those are what someone reading " +
+                     "over your shoulder, or a screenshot, would need.")
         .defaultValue(true)
+        .build());
+
+    private final Setting<Boolean> debug = sgGeneral.add(new BoolSetting.Builder()
+        .name("debug")
+        .description("Write the trigger word, the bot name and the endpoint to the game log.")
+        .defaultValue(false)
         .build());
 
     private final Setting<List<String>> messages = sgChat.add(new StringListSetting.Builder()
@@ -172,7 +180,8 @@ public class StasisPull extends Module {
                 String message = pickMessage();
                 if (message == null) return;
                 ChatUtils.sendPlayerMsg(message);
-                if (notify.get()) info("Sent \"%s\".", message);
+                if (notify.get()) info("Pull requested.");
+                if (debug.get()) log("chat: %s", message);
             }
 
             case Whisper -> {
@@ -189,14 +198,16 @@ public class StasisPull extends Module {
                 if (!command.startsWith("/")) command = "/" + command;
 
                 ChatUtils.sendPlayerMsg(command + " " + target + " " + message);
-                if (notify.get()) info("Whispered \"%s\" to %s.", message, target);
+                if (notify.get()) info("Pull requested.");
+                if (debug.get()) log("whisper to %s: %s", target, message);
             }
 
             case Http -> {
                 // Entity#getName is stable across every target; the player's game profile is
                 // not reachable the same way from 1.21.10 onward.
                 String target = mc.player.getName().getString();
-                if (notify.get()) info("Asking the bot to pull %s...", target);
+                if (notify.get()) info("Pull requested.");
+                if (debug.get()) log("http pull for %s", target);
 
                 StasisControl.homeRequest(endpoint.get(), secret.get(), target, reply -> {
                     // Callback lands on the HTTP thread; chat must be touched on the game one.
@@ -204,6 +215,10 @@ public class StasisPull extends Module {
                 });
             }
         }
+    }
+
+    private void log(String fmt, Object... args) {
+        NewAddon.LOG.info("[StasisPull] " + String.format(fmt, args));
     }
 
     private String pickMessage() {

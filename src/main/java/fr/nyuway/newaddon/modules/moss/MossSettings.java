@@ -401,10 +401,10 @@ public final class MossSettings {
 
         debug = sgDebug.add(new BoolSetting.Builder()
             .name("debug")
-            .description("Log what the scan is finding to the game log. On by default: when this " +
-                         "module looks idle the log is the only thing that can say whether moss " +
+            .description("Log what the scan is finding to the game log. Turn it on when the " +
+                         "module looks idle: the log is the only thing that can say whether moss " +
                          "was seen at all, and which check rejected it.")
-            .defaultValue(true)
+            .defaultValue(false)
             .build());
 
         debugInterval = sgDebug.add(new IntSetting.Builder()

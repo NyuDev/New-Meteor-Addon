@@ -176,10 +176,11 @@ long crossing that means coming back to a stranded character. This notices the l
 up on the spot, tops back up, clears every trace, and sends Baritone on to the same
 destination.
 
-The round: place an ender chest → take out a shulker → place it → take XP bottles and
-fireworks → throw the bottles at your feet to mend the elytra → put leftovers back in the
-same shulker → break it → return it to the slot it came from → break the ender chest with
-Silk Touch → pick it up.
+What you already carry is spent first, so a bag with XP bottles in it often finishes the job
+with nothing placed at all. Only what is still missing opens storage: place an ender chest →
+take out a shulker → place it → take XP bottles and fireworks → throw the bottles at your
+feet to mend the elytra → put leftovers back in the same shulker → break it → return it to
+the slot it came from → break the ender chest with Silk Touch → pick it up.
 
 | Setting | Default | |
 | --- | --- | --- |
@@ -190,6 +191,11 @@ Silk Touch → pick it up.
 | `void-clearance` | 2 | Solid blocks required under the spot before placing anything. |
 | `search-radius` | 4 | How far around you to look for somewhere to set up. |
 | `fireworks-to-hotbar` | on | Put fireworks on the bar, where Baritone can actually use them. |
+| `trigger-key` | unbound | Start a resupply on the spot, while the module is on. |
+| `use-carried-first` | on | Spend what you already have before opening anything. |
+| `empty-hand-to-open` | on | Hold an empty slot to open a container; some servers require it. |
+| `look-down` | on | Point at the ground when nothing else needs looking at. |
+| `hold-position` | on | Walk back to the setup block when something shoves you off it. |
 | `pause-on-killaura` | on | Freeze mid-run while fighting, resume from the same phase. |
 | `action-delay` | 4 | Ticks between actions. Instant clicks look nothing like a player. |
 | `container-settle` | 10 | Ticks to wait after a container opens before reading it. |

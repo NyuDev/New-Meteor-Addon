@@ -3,9 +3,11 @@ package fr.nyuway.newaddon.modules.elytra;
 import meteordevelopment.meteorclient.settings.BoolSetting;
 import meteordevelopment.meteorclient.settings.DoubleSetting;
 import meteordevelopment.meteorclient.settings.IntSetting;
+import meteordevelopment.meteorclient.settings.KeybindSetting;
 import meteordevelopment.meteorclient.settings.Setting;
 import meteordevelopment.meteorclient.settings.SettingGroup;
 import meteordevelopment.meteorclient.settings.Settings;
+import meteordevelopment.meteorclient.utils.misc.Keybind;
 
 /**
  * Every knob ElytraResupply exposes.
@@ -33,6 +35,11 @@ public final class ResupplySettings {
     public final Setting<Boolean> disconnectWhenDone;
     public final Setting<Boolean> releaseOnInput;
     public final Setting<Boolean> silentRotations;
+    public final Setting<Keybind> triggerKey;
+    public final Setting<Boolean> useCarriedFirst;
+    public final Setting<Boolean> emptyHandToOpen;
+    public final Setting<Boolean> lookDown;
+    public final Setting<Boolean> holdPosition;
 
     public ResupplySettings(Settings settings) {
         SettingGroup sgGeneral = settings.getDefaultGroup();
@@ -122,10 +129,47 @@ public final class ResupplySettings {
             .defaultValue(true)
             .build());
 
+        triggerKey = sgGeneral.add(new KeybindSetting.Builder()
+            .name("trigger-key")
+            .description("Press to start a resupply on the spot, without waiting to be landed " +
+                         "by a shortage. Does nothing while the module is off.")
+            .defaultValue(Keybind.none())
+            .build());
+
+        useCarriedFirst = sgGeneral.add(new BoolSetting.Builder()
+            .name("use-carried-first")
+            .description("Spend the XP bottles and fireworks you already have before opening " +
+                         "anything. Often there is enough on you to finish the trip, and then " +
+                         "no ender chest is placed at all.")
+            .defaultValue(true)
+            .build());
+
+        emptyHandToOpen = sgGeneral.add(new BoolSetting.Builder()
+            .name("empty-hand-to-open")
+            .description("Hold an empty slot before opening a container. Some servers refuse " +
+                         "the open outright when your hand is full.")
+            .defaultValue(true)
+            .build());
+
+        lookDown = sgGeneral.add(new BoolSetting.Builder()
+            .name("look-down")
+            .description("Point at the ground whenever nothing else needs looking at. In the " +
+                         "End that is the difference between a quiet resupply and a crowd of " +
+                         "endermen.")
+            .defaultValue(true)
+            .build());
+
+        holdPosition = sgGeneral.add(new BoolSetting.Builder()
+            .name("hold-position")
+            .description("Walk back to the block you set up on if something shoves you off it. " +
+                         "The routine's own moves are not fought.")
+            .defaultValue(true)
+            .build());
+
         debug = sgGeneral.add(new BoolSetting.Builder()
             .name("debug")
-            .description("Log every phase transition. Leave this on until you trust it.")
-            .defaultValue(true)
+            .description("Log every phase transition and the detail that chat leaves out.")
+            .defaultValue(false)
             .build());
 
         disconnectWhenDone = sgGeneral.add(new BoolSetting.Builder()

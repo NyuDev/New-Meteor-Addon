@@ -68,6 +68,13 @@ public class AutoStasisPull extends Module {
         .defaultValue(true)
         .build());
 
+    private final Setting<Boolean> debug = sgGeneral.add(new BoolSetting.Builder()
+        .name("debug")
+        .description("Write the exact trigger - health, height, who was near - to the game log. " +
+                     "Chat only says that a pull happened.")
+        .defaultValue(false)
+        .build());
+
     private final Setting<Boolean> toggleOff = sgGeneral.add(new BoolSetting.Builder()
         .name("toggle-off")
         .description("Turn this module off after a pull, so it does not keep firing while you " +
@@ -220,7 +227,7 @@ public class AutoStasisPull extends Module {
             while (!popTimes.isEmpty() && popTimes.peekFirst() < windowStart) popTimes.pollFirst();
 
             if (popTimes.size() >= totemWindowPops.get()) {
-                fire(popTimes.size() + " totems popped within " + totemWindowSeconds.get() + "s");
+                fire("totems popping", popTimes.size() + " within " + totemWindowSeconds.get() + "s");
                 popTimes.clear();
             }
         }
@@ -235,7 +242,7 @@ public class AutoStasisPull extends Module {
         // not save you from void damage - it kills through them - so there is nothing to
         // weigh up: either the pull happens now or it does not happen.
         if (voidTrigger.get() && mc.player.getY() < voidThreshold()) {
-            fire(String.format("in the void at y %.0f", mc.player.getY()));
+            fire("falling out of the world", String.format("y %.0f", mc.player.getY()));
             return;
         }
 
@@ -243,7 +250,7 @@ public class AutoStasisPull extends Module {
             recountAtTick = -1;
             int left = countTotems();
             if (left <= totemRemaining.get()) {
-                fire("popped a totem, " + left + " left");
+                fire("totem popped", left + " totems left");
                 return;
             }
         }
@@ -252,7 +259,7 @@ public class AutoStasisPull extends Module {
             float health = mc.player.getHealth();
             if (countAbsorption.get()) health += mc.player.getAbsorptionAmount();
             if (health <= healthLevel.get()) {
-                fire(String.format("health %.1f", health));
+                fire("hurt", String.format("health %.1f", health));
                 return;
             }
         }
@@ -262,7 +269,7 @@ public class AutoStasisPull extends Module {
             for (Player player : mc.level.players()) {
                 if (player == mc.player || Friends.get().isFriend(player)) continue;
                 if (mc.player.distanceTo(player) <= range) {
-                    fire(player.getName().getString() + " is close");
+                    fire("someone is close", player.getName().getString() + " within range");
                     return;
                 }
             }
@@ -285,8 +292,14 @@ public class AutoStasisPull extends Module {
         return total;
     }
 
-    private void fire(String reason) {
+    /**
+     * @param reason short, vague, for chat
+     * @param detail the numbers behind it, for the log only - chat is public the moment it is
+     *               screenshotted, and a height or a name is most of a location
+     */
+    private void fire(String reason, String detail) {
         warning("Pulling out: %s.", reason);
+        if (debug.get()) NewAddon.LOG.info("[AutoStasisPull] pulling out: " + detail);
         Modules.get().get(StasisPull.class).pull();
         if (toggleOff.get()) toggle();
     }
