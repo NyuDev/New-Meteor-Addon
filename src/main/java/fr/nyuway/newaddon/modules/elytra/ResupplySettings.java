@@ -40,6 +40,8 @@ public final class ResupplySettings {
     public final Setting<Boolean> emptyHandToOpen;
     public final Setting<Boolean> lookDown;
     public final Setting<Boolean> holdPosition;
+    public final Setting<Boolean> endHighCruise;
+    public final Setting<Double> endClearance;
 
     public ResupplySettings(Settings settings) {
         SettingGroup sgGeneral = settings.getDefaultGroup();
@@ -155,8 +157,8 @@ public final class ResupplySettings {
             .name("look-down")
             .description("Point at the ground whenever nothing else needs looking at. In the " +
                          "End that is the difference between a quiet resupply and a crowd of " +
-                         "endermen.")
-            .defaultValue(true)
+                         "endermen; off, your view is left alone entirely.")
+            .defaultValue(false)
             .build());
 
         holdPosition = sgGeneral.add(new BoolSetting.Builder()
@@ -164,6 +166,23 @@ public final class ResupplySettings {
             .description("Walk back to the block you set up on if something shoves you off it. " +
                          "The routine's own moves are not fought.")
             .defaultValue(true)
+            .build());
+
+        endHighCruise = sgGeneral.add(new BoolSetting.Builder()
+            .name("end-high-cruise")
+            .description("Fly higher over the End. Baritone has no cruising altitude to set - " +
+                         "its elytra path hugs the terrain - so this raises the clearance it " +
+                         "keeps from that terrain, which is the only lever there is. Restored " +
+                         "when the module stops.")
+            .defaultValue(true)
+            .build());
+
+        endClearance = sgGeneral.add(new DoubleSetting.Builder()
+            .name("end-clearance")
+            .description("Blocks of clearance to demand while over the End. Higher flies " +
+                         "higher and wastes more fireworks climbing.")
+            .defaultValue(24.0).min(1.0).max(120.0).sliderRange(4.0, 64.0)
+            .visible(endHighCruise::get)
             .build());
 
         debug = sgGeneral.add(new BoolSetting.Builder()

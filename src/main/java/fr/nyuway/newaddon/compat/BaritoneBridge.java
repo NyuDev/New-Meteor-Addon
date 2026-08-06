@@ -47,6 +47,7 @@ public final class BaritoneBridge {
     private static Method mGetGoal;
     private static Class<?> goalRenderPosClass;
     private static Method mGetGoalPos;
+    private static Method mGetSettings;
     private static Method mGetElytraProcess;
     private static Method mElytraIsActive;
     private static Method mElytraDestination;
@@ -209,6 +210,43 @@ public final class BaritoneBridge {
         }
     }
 
+    /**
+     * Reads one of Baritone's own settings.
+     *
+     * <p>Reached by name through {@code BaritoneAPI.getSettings()} rather than bound up front:
+     * these are conveniences, and a setting that a given fork happens not to have should leave
+     * the rest of the bridge working.
+     *
+     * @return the current value, or null when the setting does not exist
+     */
+    public static Object setting(String name) {
+        if (!isUsable()) return null;
+
+        try {
+            Object settings = mGetSettings.invoke(null);
+            Object holder = settings.getClass().getField(name).get(settings);
+            return holder.getClass().getField("value").get(holder);
+        } catch (Throwable t) {
+            fail("reading setting " + name + " failed", t);
+            return null;
+        }
+    }
+
+    /** Writes one of Baritone's own settings. Returns whether it took. */
+    public static boolean setSetting(String name, Object value) {
+        if (!isUsable()) return false;
+
+        try {
+            Object settings = mGetSettings.invoke(null);
+            Object holder = settings.getClass().getField(name).get(settings);
+            holder.getClass().getField("value").set(holder, value);
+            return true;
+        } catch (Throwable t) {
+            fail("writing setting " + name + " failed", t);
+            return false;
+        }
+    }
+
     /** Stops whatever Baritone is currently doing. */
     public static void cancel() {
         if (!isUsable()) return;
@@ -245,6 +283,8 @@ public final class BaritoneBridge {
             Class<?> baritoneClass = Class.forName("baritone.api.IBaritone");
             Class<?> scannerClass = Class.forName("baritone.api.cache.IWorldScanner");
             Class<?> ctxClass = Class.forName("baritone.api.utils.IPlayerContext");
+            mGetSettings = Class.forName("baritone.api.BaritoneAPI").getMethod("getSettings");
+
             Class<?> goalClass = Class.forName("baritone.api.pathing.goals.Goal");
             Class<?> goalNearClass = Class.forName("baritone.api.pathing.goals.GoalNear");
             Class<?> goalXZClass = Class.forName("baritone.api.pathing.goals.GoalXZ");

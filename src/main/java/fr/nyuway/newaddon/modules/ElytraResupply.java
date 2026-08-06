@@ -26,6 +26,7 @@ import net.minecraft.world.inventory.AbstractContainerMenu;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
+import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.Vec3;
@@ -83,6 +84,9 @@ public class ElytraResupply extends Module {
 
     /** Failed takeoffs in a row before the module bows out and hands control back to the player. */
     private static final int MAX_TAKEOFF_FAILURES = 3;
+
+    /** Baritone's terrain clearance for elytra paths; the only lever on how high it flies. */
+    private static final String AVOIDANCE = "elytraMinimumAvoidance";
 
     /** Ticks allowed to glide down after a mid-flight trigger before giving up. */
     private static final int LANDING_TIMEOUT = 20 * 60;
@@ -151,6 +155,9 @@ public class ElytraResupply extends Module {
      * ceiling to keep this phase alive - and a counter that cannot advance cannot expire.
      */
     private int landTicks;
+    /** Baritone's own clearance before we raised it, so it can be handed back untouched. */
+    private Double savedAvoidance;
+    private int ticks;
 
     public ElytraResupply() {
         super(NewAddon.CATEGORY, "elytra-resupply",
@@ -161,6 +168,7 @@ public class ElytraResupply extends Module {
     public void onActivate() {
         reset();
         takeoffFailures = 0;
+        applyEndCruise();
         if (!BaritoneBridge.isPresent()) {
             warning("This needs Meteor's Baritone fork; nothing will happen without it.");
         }
@@ -169,6 +177,36 @@ public class ElytraResupply extends Module {
     @Override
     public void onDeactivate() {
         reset();
+        restoreEndCruise();
+    }
+
+    /**
+     * Asks Baritone to keep further away from the terrain while over the End.
+     *
+     * <p>Baritone has no cruising altitude to set: its elytra path follows the ground. The
+     * clearance it keeps from that ground is the only thing that moves the whole flight up,
+     * so that is what this raises. The original is put back when the module stops, because a
+     * setting we changed and left changed would quietly alter every later flight.
+     */
+    private void applyEndCruise() {
+        if (!cfg.endHighCruise.get() || savedAvoidance != null) return;
+        if (mc.level == null || mc.level.dimension() != Level.END) return;
+
+        Object current = BaritoneBridge.setting(AVOIDANCE);
+        if (!(current instanceof Double d)) return;
+
+        savedAvoidance = d;
+        if (BaritoneBridge.setSetting(AVOIDANCE, cfg.endClearance.get())
+            && cfg.debug.get()) {
+            log("End cruise: %s %s -> %s", AVOIDANCE, d, cfg.endClearance.get());
+        }
+    }
+
+    private void restoreEndCruise() {
+        if (savedAvoidance == null) return;
+        BaritoneBridge.setSetting(AVOIDANCE, savedAvoidance);
+        if (cfg.debug.get()) log("End cruise: %s restored to %s", AVOIDANCE, savedAvoidance);
+        savedAvoidance = null;
     }
 
     private void reset() {
@@ -236,6 +274,12 @@ public class ElytraResupply extends Module {
             if (isContainerOpen()) mc.player.closeContainer();
             if (cfg.debug.get() && pauseTicks++ % 20 == 0) log("paused: KillAura is fighting");
             return;
+        }
+
+        // Cheap, and the dimension can change under us mid-session.
+        if (ticks++ % 20 == 0) {
+            if (mc.level.dimension() == Level.END) applyEndCruise();
+            else restoreEndCruise();
         }
 
         if (manualTriggerPressed() && phase == Phase.IDLE) {
@@ -419,9 +463,21 @@ public class ElytraResupply extends Module {
         // this out, carry on", not "place an ender chest at this altitude". Come down first
         // and let the landing pick up where this leaves off.
         if (!mc.player.onGround() || BaritoneBridge.isElytraActive()) {
+            // Capture whatever Baritone was aiming at before touching its goal, whichever
+            // process holds it. Losing this is losing the trip.
+            BlockPos going = BaritoneBridge.isElytraActive()
+                ? BaritoneBridge.elytraDestination() : null;
+            if (going == null) going = BaritoneBridge.currentGoalPos();
+            if (going != null && isRealTravelGoal(going)) resumeTarget = going;
+
+            // Land by retargeting rather than cancelling. Cancelling stops the elytra process
+            // outright, which reads as the module switching itself off and leaves nothing to
+            // resume; pointing it at where we already are brings it down and keeps it running.
             info("Landing to resupply.");
-            if (cfg.debug.get()) log("triggered in the air; cancelling the flight to land");
-            BaritoneBridge.cancel();
+            if (cfg.debug.get()) {
+                log("triggered in the air; retargeting to here, will resume %s", resumeTarget);
+            }
+            BaritoneBridge.elytraPathTo(mc.player.blockPosition());
             landTicks = 0;
             to(Phase.LAND);
             return;
@@ -466,6 +522,11 @@ public class ElytraResupply extends Module {
 
         landTicks = 0;
         anchor = mc.player.blockPosition();
+
+        // Down safely, so stop the process now rather than leaving it pathing to a goal we
+        // are already standing on while the routine places blocks around it. Safe to do here
+        // and nowhere earlier: the real destination is already saved.
+        BaritoneBridge.cancel();
         if (cfg.debug.get()) log("landed, setting up");
 
         if (cfg.useCarriedFirst.get() && needMending
@@ -948,14 +1009,16 @@ public class ElytraResupply extends Module {
             // shulker takes its whole contents with it.
             if (!walkingToDrop) {
                 walkingToDrop = true;
-                problem("Drop not collected, walking to %s to get it.", pos);
+                problem("Drop not collected, walking to get it.");
+                if (cfg.debug.get()) log("walking to the drop at %s", pos);
                 BaritoneBridge.pathTo(pos, 0);
             }
 
             // Chasing it forever would strand the trip. Write it off and carry on, rather
             // than letting the phase timeout tear down a run that is otherwise finished.
             if (phaseTicks > COLLECT_GIVEUP) {
-                problem("Could not recover the drop at %s; carrying on without it.", pos);
+                problem("Could not recover the drop; carrying on without it.");
+                if (cfg.debug.get()) log("gave up on the drop at %s", pos);
                 to(next);
             }
             return;
@@ -967,6 +1030,12 @@ public class ElytraResupply extends Module {
             // into obsidian with whatever happens to be in hand.
             if (silk == -1) return;
             InvUtils.swap(silk, false);
+        } else {
+            // A shulker drops itself however it is broken, so no enchantment is needed - but
+            // punching one takes seconds you spend standing still in the open. The pickaxe is
+            // already on the bar for the ender chest; use it.
+            FindItemResult tool = InvUtils.findFastestTool(mc.level.getBlockState(pos));
+            if (tool.found()) InvUtils.swap(tool.slot(), false);
         }
 
         Interactions.mine(mc, pos, cfg.silentRotations.get(), true);
