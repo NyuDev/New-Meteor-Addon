@@ -6,6 +6,7 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.block.Block;
 
 import java.lang.reflect.Constructor;
+import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.util.List;
 
@@ -51,6 +52,7 @@ public final class BaritoneBridge {
     private static Method mElytraDestination;
     private static Method mElytraPathTo;
     private static Constructor<?> cGoalNear;
+    private static Constructor<?> cGoalBlock;
     private static Constructor<?> cGoalXZ;
 
     private BaritoneBridge() {
@@ -95,14 +97,24 @@ public final class BaritoneBridge {
         }
     }
 
-    /** Sends Baritone walking to within {@code radius} blocks of {@code pos}. */
+    /**
+     * Sends Baritone walking to within {@code radius} blocks of {@code pos}.
+     *
+     * <p>A radius of zero uses {@code GoalBlock} rather than a zero-radius {@code GoalNear}.
+     * While the elytra process is running, {@code CustomGoalProcess.setGoal} hands the goal
+     * straight to it, and it accepts only {@code GoalXZ} or {@code GoalBlock} - anything else
+     * throws, which is not something a caller asking to walk one block can be expected to know.
+     */
     public static boolean pathTo(BlockPos pos, int radius) {
         if (!isUsable()) return false;
 
         try {
             Object baritone = mGetPrimaryBaritone.invoke(provider);
             Object process = mGetCustomGoalProcess.invoke(baritone);
-            mSetGoalAndPath.invoke(process, cGoalNear.newInstance(pos, radius));
+            Object goal = radius <= 0
+                ? cGoalBlock.newInstance(pos)
+                : cGoalNear.newInstance(pos, radius);
+            mSetGoalAndPath.invoke(process, goal);
             return true;
         } catch (Throwable t) {
             fail("pathTo failed", t);
@@ -236,6 +248,7 @@ public final class BaritoneBridge {
             Class<?> goalClass = Class.forName("baritone.api.pathing.goals.Goal");
             Class<?> goalNearClass = Class.forName("baritone.api.pathing.goals.GoalNear");
             Class<?> goalXZClass = Class.forName("baritone.api.pathing.goals.GoalXZ");
+            Class<?> goalBlockClass = Class.forName("baritone.api.pathing.goals.GoalBlock");
             Class<?> customGoalClass = Class.forName("baritone.api.process.ICustomGoalProcess");
             Class<?> pathingClass = Class.forName("baritone.api.behavior.IPathingBehavior");
             Class<?> elytraClass = Class.forName("baritone.api.process.IElytraProcess");
@@ -266,6 +279,7 @@ public final class BaritoneBridge {
             mElytraPathTo = elytraClass.getMethod("pathTo", BlockPos.class);
             cGoalNear = goalNearClass.getConstructor(BlockPos.class, int.class);
             cGoalXZ = goalXZClass.getConstructor(int.class, int.class);
+            cGoalBlock = goalBlockClass.getConstructor(BlockPos.class);
 
             usable = true;
         } catch (Throwable t) {
@@ -273,8 +287,24 @@ public final class BaritoneBridge {
         }
     }
 
-    /** Logs once, then goes quiet: a broken binding must not spam the log every tick. */
+    /**
+     * Reports a failure, and decides whether it is worth giving up on Baritone entirely.
+     *
+     * <p>{@link InvocationTargetException} means the binding resolved and Baritone's own method
+     * threw - a rejected argument, a bad state, something this call got wrong. That says
+     * nothing about the other twelve bindings, and latching {@code usable} off for it took one
+     * unacceptable goal and silently killed every Baritone feature for the rest of the session.
+     *
+     * <p>Anything else is the binding itself being wrong, which will not fix itself, so that
+     * still latches.
+     */
     private static void fail(String what, Throwable t) {
+        if (t instanceof InvocationTargetException) {
+            NewAddon.LOG.warn("[Baritone] {} - refused by Baritone: {}",
+                what, String.valueOf(t.getCause()));
+            return;
+        }
+
         usable = false;
         if (warned) return;
         warned = true;

@@ -58,6 +58,8 @@ public class ElytraResupply extends Module {
 
     private enum Phase {
         IDLE,
+        /** Coming down before anything can be placed. Only a manual trigger starts here. */
+        LAND,
         PLACE_CHEST, OPEN_CHEST, TAKE_SHULKER, PLACE_SHULKER, OPEN_SHULKER, TAKE_SUPPLIES,
         REPAIR, SWAP_ELYTRA,
         RETURN_SUPPLIES, BREAK_SHULKER, RETURN_SHULKER, BREAK_CHEST,
@@ -81,6 +83,9 @@ public class ElytraResupply extends Module {
 
     /** Failed takeoffs in a row before the module bows out and hands control back to the player. */
     private static final int MAX_TAKEOFF_FAILURES = 3;
+
+    /** Ticks allowed to glide down after a mid-flight trigger before giving up. */
+    private static final int LANDING_TIMEOUT = 20 * 60;
 
     /** How far off the setup block counts as having been pushed rather than having stepped. */
     private static final double PUSH_TOLERANCE = 1.6;
@@ -141,6 +146,11 @@ public class ElytraResupply extends Module {
     private boolean localPass;
     /** Edge detection for the manual trigger key. */
     private boolean triggerHeld;
+    /**
+     * Ticks spent gliding down. Separate from phaseTicks, which the phase timeout pins at its
+     * ceiling to keep this phase alive - and a counter that cannot advance cannot expire.
+     */
+    private int landTicks;
 
     public ElytraResupply() {
         super(NewAddon.CATEGORY, "elytra-resupply",
@@ -183,6 +193,7 @@ public class ElytraResupply extends Module {
         xpCheckAt = -1;
         repairSettleUntil = 0;
         localPass = false;
+        landTicks = 0;
 
         if (walkingToDrop) {
             BaritoneBridge.cancel();
@@ -241,8 +252,10 @@ public class ElytraResupply extends Module {
         parkView();
 
         if (++phaseTicks > PHASE_TIMEOUT) {
-            if (phase == Phase.WAIT_DISCONNECT) {
-                phaseTicks = PHASE_TIMEOUT; // keep waiting until landed
+            if (phase == Phase.WAIT_DISCONNECT || phase == Phase.LAND) {
+                // Both of these wait on the ground arriving, which takes as long as it takes.
+                phaseTicks = PHASE_TIMEOUT;
+                if (phase == Phase.LAND) land();
                 return;
             }
             warning("Timed out; cleaning up.");
@@ -252,6 +265,7 @@ public class ElytraResupply extends Module {
         }
 
         switch (phase) {
+            case LAND -> land();
             case PLACE_CHEST -> placeChest();
             case OPEN_CHEST -> openBlock(chestPos, Phase.TAKE_SHULKER);
             case TAKE_SHULKER -> takeShulker();
@@ -297,6 +311,11 @@ public class ElytraResupply extends Module {
      */
     private void holdPosition() {
         if (!cfg.holdPosition.get() || anchor == null || walkingToDrop) return;
+
+        // Only meaningful with both feet on the ground. In the air the distance from the
+        // anchor grows every tick by design, and asking Baritone to walk back mid-glide hands
+        // its elytra process a goal it refuses outright.
+        if (!mc.player.onGround() || BaritoneBridge.isElytraActive()) return;
 
         double dx = mc.player.getX() - (anchor.getX() + 0.5);
         double dz = mc.player.getZ() - (anchor.getZ() + 0.5);
@@ -396,6 +415,18 @@ public class ElytraResupply extends Module {
             return;
         }
 
+        // Pressed mid-flight, which is the normal way to use it: the ask is "put down, sort
+        // this out, carry on", not "place an ender chest at this altitude". Come down first
+        // and let the landing pick up where this leaves off.
+        if (!mc.player.onGround() || BaritoneBridge.isElytraActive()) {
+            info("Landing to resupply.");
+            if (cfg.debug.get()) log("triggered in the air; cancelling the flight to land");
+            BaritoneBridge.cancel();
+            landTicks = 0;
+            to(Phase.LAND);
+            return;
+        }
+
         anchor = mc.player.blockPosition();
         if (cfg.debug.get()) {
             log("run starting at %s (manual=%s fireworks=%s mending=%s)",
@@ -414,6 +445,40 @@ public class ElytraResupply extends Module {
         if (!openStorageAllowed()) return;
 
         info("Resupplying.");
+        to(Phase.PLACE_CHEST);
+    }
+
+    /**
+     * Waits out the glide down after a mid-flight trigger.
+     *
+     * <p>The destination was captured before the flight was cancelled, so the run finishes the
+     * way an automatic one does: resupply, then hand the same goal back to Baritone.
+     */
+    private void land() {
+        if (!mc.player.onGround()) {
+            // Long: coming down from cruising altitude is a glide, not a fall.
+            if (++landTicks > LANDING_TIMEOUT) {
+                warning("Could not get down; giving up.");
+                abort();
+            }
+            return;
+        }
+
+        landTicks = 0;
+        anchor = mc.player.blockPosition();
+        if (cfg.debug.get()) log("landed, setting up");
+
+        if (cfg.useCarriedFirst.get() && needMending
+            && PlayerInv.count(mc, Items.EXPERIENCE_BOTTLE) > 0) {
+            localPass = true;
+            to(Phase.REPAIR);
+            return;
+        }
+
+        if (!openStorageAllowed()) {
+            abort();
+            return;
+        }
         to(Phase.PLACE_CHEST);
     }
 
@@ -973,7 +1038,8 @@ public class ElytraResupply extends Module {
         reset();
 
         if (target == null) return;
-        info("Resupplied. Flying on to %s.", target);
+        info("Resupplied. Flying on.");
+        if (cfg.debug.get()) log("resuming to %s", target);
         BaritoneBridge.elytraPathTo(target);
     }
 
