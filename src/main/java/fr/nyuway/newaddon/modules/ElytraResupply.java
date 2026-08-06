@@ -28,7 +28,6 @@ import net.minecraft.world.inventory.AbstractContainerMenu;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
-import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.Vec3;
@@ -160,12 +159,10 @@ public class ElytraResupply extends Module {
      */
     private int landTicks;
     /** Baritone's own clearance before we raised it, so it can be handed back untouched. */
-    private Double savedAvoidance;
     /** Hotbar slots borrowed for the routine, to be handed back before it lets go. */
     private final SlotLoans loans = new SlotLoans();
     /** Scratch position for the stuck check, so a per-tick test allocates nothing. */
     private final BlockPos.MutableBlockPos unstickCursor = new BlockPos.MutableBlockPos();
-    private int ticks;
 
     public ElytraResupply() {
         super(NewAddon.CATEGORY, "elytra-resupply",
@@ -177,7 +174,7 @@ public class ElytraResupply extends Module {
         reset();
         loans.clear();
         takeoffFailures = 0;
-        applyEndCruise();
+        repairAvoidance();
         if (!BaritoneBridge.isPresent()) {
             warning("This needs Meteor's Baritone fork; nothing will happen without it.");
         }
@@ -194,36 +191,27 @@ public class ElytraResupply extends Module {
         loans.clear();
 
         reset();
-        restoreEndCruise();
     }
 
     /**
-     * Asks Baritone to keep further away from the terrain while over the End.
+     * Undoes damage an earlier build of this module did to Baritone.
      *
-     * <p>Baritone has no cruising altitude to set: its elytra path follows the ground. The
-     * clearance it keeps from that ground is the only thing that moves the whole flight up,
-     * so that is what this raises. The original is put back when the module stops, because a
-     * setting we changed and left changed would quietly alter every later flight.
+     * <p>It used to raise {@code elytraMinimumAvoidance} on the belief that it was terrain
+     * clearance in blocks. It is not - Baritone ships it at 0.2 - and forcing it to tens left
+     * the elytra solver unable to find any acceptable path, so the flight circled its last
+     * point instead of advancing. Worse, Baritone persists its settings, so the bad value
+     * survived a restart.
+     *
+     * <p>Anything above one is far outside what that knob is for and can only have come from
+     * here, so it goes back to the default.
      */
-    private void applyEndCruise() {
-        if (!cfg.endHighCruise.get() || savedAvoidance != null) return;
-        if (mc.level == null || mc.level.dimension() != Level.END) return;
-
+    private void repairAvoidance() {
         Object current = BaritoneBridge.setting(AVOIDANCE);
-        if (!(current instanceof Double d)) return;
+        if (!(current instanceof Double d) || d <= 1.0) return;
 
-        savedAvoidance = d;
-        if (BaritoneBridge.setSetting(AVOIDANCE, cfg.endClearance.get())
-            && cfg.debug.get()) {
-            log("End cruise: %s %s -> %s", AVOIDANCE, d, cfg.endClearance.get());
-        }
-    }
-
-    private void restoreEndCruise() {
-        if (savedAvoidance == null) return;
-        BaritoneBridge.setSetting(AVOIDANCE, savedAvoidance);
-        if (cfg.debug.get()) log("End cruise: %s restored to %s", AVOIDANCE, savedAvoidance);
-        savedAvoidance = null;
+        BaritoneBridge.setSetting(AVOIDANCE, 0.2);
+        warning("Reset Baritone's %s from %s to 0.2; an earlier build of this module set it "
+            + "and it was stopping elytra flights from advancing.", AVOIDANCE, d);
     }
 
     private void reset() {
@@ -291,12 +279,6 @@ public class ElytraResupply extends Module {
             if (isContainerOpen()) mc.player.closeContainer();
             if (cfg.debug.get() && pauseTicks++ % 20 == 0) log("paused: KillAura is fighting");
             return;
-        }
-
-        // Cheap, and the dimension can change under us mid-session.
-        if (ticks++ % 20 == 0) {
-            if (mc.level.dimension() == Level.END) applyEndCruise();
-            else restoreEndCruise();
         }
 
         if (manualTriggerPressed() && phase == Phase.IDLE) {

@@ -196,7 +196,6 @@ the slot it came from → break the ender chest with Silk Touch → pick it up.
 | `empty-hand-to-open` | on | Hold an empty slot to open a container; some servers require it. |
 | `look-down` | off | Point at the ground when nothing else needs looking at. |
 | `hold-position` | on | Walk back to the setup block when something shoves you off it. |
-| `end-high-cruise` / `end-clearance` | on / 24 | Fly higher over the End by demanding more terrain clearance. |
 | `pause-on-killaura` | on | Freeze mid-run while fighting, resume from the same phase. |
 | `action-delay` | 4 | Ticks between actions. Instant clicks look nothing like a player. |
 | `container-settle` | 10 | Ticks to wait after a container opens before reading it. |
