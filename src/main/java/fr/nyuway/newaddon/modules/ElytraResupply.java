@@ -128,6 +128,8 @@ public class ElytraResupply extends Module {
     private boolean elytraWasActive;
     /** Paces the idle diagnostic so it explains itself without flooding the log. */
     private int idleTicks;
+    /** Paces debugDue, kept apart from the idle report's own counter. */
+    private int noteTicks;
     /** Paces the combat-pause diagnostic the same way. */
     private int pauseTicks;
     /** How many of the item we already carried before mining, so a real pickup is detectable. */
@@ -406,9 +408,9 @@ public class ElytraResupply extends Module {
             !cfg.silentRotations.get(), () -> { });
     }
 
-    /** Paces an occasional debug line without a counter of its own per call site. */
+    /** Paces an occasional debug line. Its own counter: sharing one starves both. */
     private boolean debugDue() {
-        return cfg.debug.get() && idleTicks++ % 40 == 0;
+        return cfg.debug.get() && noteTicks++ % 40 == 0;
     }
 
     /** Horizontal distance to the destination, or infinity when there is none. */
@@ -455,11 +457,20 @@ public class ElytraResupply extends Module {
             log("travel goal noted: %s", dest);
         }
 
-        // Still airborne, whether or not the process admits to being active.
-        if (elytraActive || !mc.player.onGround()) {
+        // Whether we are flying is decided by the ground under our feet, not by what the
+        // elytra process claims. It reports active while stuck - the process is running, the
+        // player is not moving - and treating that as "still flying" meant returning here
+        // every tick without so much as a log line, which is exactly what being stuck in a
+        // field looks like from outside.
+        if (!mc.player.onGround()) {
             elytraWasActive = true;
             groundTicks = 0;
             return;
+        }
+
+        if (elytraActive && debugDue()) {
+            log("on the ground with the elytra process still claiming active - treating it "
+                + "as stuck");
         }
         elytraWasActive = false;
 
@@ -487,9 +498,16 @@ public class ElytraResupply extends Module {
             if (cfg.autoRelaunch.get() && !arrived()) {
                 if (++groundTicks < cfg.relaunchDelay.get()) return;
                 groundTicks = 0;
+
+                // Clear whatever the process thinks it is doing first. A run that believes it
+                // is mid-flight while standing still will not accept a fresh destination, and
+                // RESUME hands it one the moment we are airborne again.
+                if (elytraActive) BaritoneBridge.cancel();
+
                 info("Back in the air.");
                 if (cfg.debug.get()) {
-                    log("relaunching, %d blocks from the destination", (int) distanceToTarget());
+                    log("relaunching, %d blocks from the destination (processActive=%s)",
+                        (int) distanceToTarget(), elytraActive);
                 }
                 to(Phase.TAKEOFF);
                 return;
