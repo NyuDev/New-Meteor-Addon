@@ -34,6 +34,8 @@ public final class ResupplySettings {
     public final Setting<Boolean> debug;
     public final Setting<Boolean> disconnectWhenDone;
     public final Setting<Double> arrivalRadius;
+    public final Setting<Boolean> voidGuard;
+    public final Setting<Integer> voidMargin;
     public final Setting<Boolean> autoRelaunch;
     public final Setting<Integer> relaunchDelay;
     public final Setting<Boolean> releaseOnInput;
@@ -188,6 +190,23 @@ public final class ResupplySettings {
                          "landing.")
             .defaultValue(150.0).min(8.0).max(2000.0).sliderRange(32.0, 512.0)
             .visible(disconnectWhenDone::get)
+            .build());
+
+        voidGuard = sgGeneral.add(new BoolSetting.Builder()
+            .name("void-guard")
+            .description("Put down on solid ground before the flight sinks into the void, then " +
+                         "carry on. Baritone's elytra process will happily glide out under the " +
+                         "islands, and below the damage line nothing saves you.")
+            .defaultValue(true)
+            .build());
+
+        voidMargin = sgGeneral.add(new IntSetting.Builder()
+            .name("void-margin")
+            .description("Blocks above the void damage line at which to break off and land. " +
+                         "The gap has to cover the descent itself, not just the moment of " +
+                         "noticing.")
+            .defaultValue(32).min(4).max(128).sliderRange(8, 64)
+            .visible(voidGuard::get)
             .build());
 
         autoRelaunch = sgGeneral.add(new BoolSetting.Builder()

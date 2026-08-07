@@ -6,11 +6,13 @@ import fr.nyuway.newaddon.modules.elytra.ResupplySettings;
 import fr.nyuway.newaddon.utils.Combat;
 import fr.nyuway.newaddon.utils.Containers;
 import fr.nyuway.newaddon.utils.Enchants;
+import fr.nyuway.newaddon.utils.GroundFinder;
 import fr.nyuway.newaddon.utils.Interactions;
 import fr.nyuway.newaddon.utils.PlayerInv;
 import fr.nyuway.newaddon.utils.ShulkerContents;
 import fr.nyuway.newaddon.utils.SlotLoans;
 import fr.nyuway.newaddon.utils.SpotFinder;
+import fr.nyuway.newaddon.utils.WorldBounds;
 import fr.nyuway.newaddon.utils.Unstuck;
 import meteordevelopment.meteorclient.events.world.TickEvent;
 import meteordevelopment.meteorclient.settings.Setting;
@@ -69,6 +71,8 @@ public class ElytraResupply extends Module {
         RESTORE_HOTBAR,
         /** Walking off a spot that will not let us take off. */
         REPOSITION,
+        /** Coming down on solid ground before the void gets us. */
+        VOID_LAND,
         TAKEOFF, WAIT_DISCONNECT, RESUME
     }
 
@@ -100,6 +104,9 @@ public class ElytraResupply extends Module {
 
     /** Baritone's terrain clearance for elytra paths; the only lever on how high it flies. */
     private static final String AVOIDANCE = "elytraMinimumAvoidance";
+
+    /** Ticks between two ground sweeps while below the void margin. */
+    private static final int VOID_SCAN_INTERVAL = 20;
 
     /** Relaunches from one spot before walking somewhere else, and before giving up. */
     private static final int RELAUNCH_BEFORE_WALK = 2;
@@ -181,6 +188,8 @@ public class ElytraResupply extends Module {
     private int groundTicks;
     /** Consecutive relaunches that never got us off the ground. */
     private int relaunchTries;
+    /** Ticks before the ground sweep may run again. */
+    private int voidScanCooldown;
     /** World the destination was captured in. */
     private Object lastLevel;
     /** Edge detection for the manual trigger key. */
@@ -271,6 +280,7 @@ public class ElytraResupply extends Module {
         stranded = false;
         returnTried = false;
         relaunchTries = 0;
+        voidScanCooldown = 0;
         landTicks = 0;
         groundTicks = 0;
 
@@ -351,10 +361,12 @@ public class ElytraResupply extends Module {
                 reposition();
                 return;
             }
-            if (phase == Phase.WAIT_DISCONNECT || phase == Phase.LAND) {
+            if (phase == Phase.WAIT_DISCONNECT || phase == Phase.LAND
+                || phase == Phase.VOID_LAND) {
                 // Both of these wait on the ground arriving, which takes as long as it takes.
                 phaseTicks = PHASE_TIMEOUT;
                 if (phase == Phase.LAND) land();
+                else if (phase == Phase.VOID_LAND) voidLand();
                 return;
             }
             warning("Timed out; cleaning up.");
@@ -379,6 +391,7 @@ public class ElytraResupply extends Module {
                 Phase.RESTORE_HOTBAR);
             case RESTORE_HOTBAR -> restoreHotbar();
             case REPOSITION -> reposition();
+            case VOID_LAND -> voidLand();
             case TAKEOFF -> takeoff();
             case WAIT_DISCONNECT -> waitAndDisconnect();
             case SWAP_ELYTRA -> swapElytra();
@@ -506,6 +519,7 @@ public class ElytraResupply extends Module {
             groundTicks = 0;
             // Off the ground for real, so whatever it took worked and the count starts over.
             relaunchTries = 0;
+            voidGuard();
             return;
         }
 
@@ -642,6 +656,81 @@ public class ElytraResupply extends Module {
 
         info("Resupplying.");
         to(Phase.PLACE_CHEST);
+    }
+
+    /**
+     * Breaks off the flight before it sinks past the height where the world kills you.
+     *
+     * <p>Baritone's elytra process has no notion of the void as a hazard: over the End it will
+     * glide out from under the islands and only think about landing once the fireworks run
+     * low, by which point there is nothing left to land on. The margin has to cover the
+     * descent, not just the moment of noticing - you are still falling while you look for
+     * somewhere to put down.
+     */
+    private void voidGuard() {
+        if (!cfg.voidGuard.get()) return;
+
+        double floor = WorldBounds.voidDamageY(mc.level) + cfg.voidMargin.get();
+        if (mc.player.getY() >= floor) {
+            voidScanCooldown = 0;
+            return;
+        }
+
+        // The sweep reads tens of thousands of blocks. Once a second is plenty while falling,
+        // and running it every tick would cost more than the drop it is trying to prevent.
+        if (voidScanCooldown > 0) {
+            voidScanCooldown--;
+            return;
+        }
+        voidScanCooldown = VOID_SCAN_INTERVAL;
+
+        // Save the trip before touching the goal, exactly as the manual trigger does.
+        BlockPos going = BaritoneBridge.isElytraActive()
+            ? BaritoneBridge.elytraDestination() : null;
+        if (going == null) going = BaritoneBridge.currentGoalPos();
+        if (going != null && isRealTravelGoal(going)) resumeTarget = going;
+
+        BlockPos ground = GroundFinder.find(mc, WorldBounds.voidDamageY(mc.level)
+            + cfg.voidMargin.get());
+        if (ground == null) {
+            // Nothing within reach. Saying so beats silently carrying on into the drop.
+            if (debugDue()) {
+                log("void guard: below %.0f with no ground in range", floor);
+            }
+            return;
+        }
+
+        warning("Too low - landing before the void.");
+        if (cfg.debug.get()) {
+            log("void guard: y=%.1f floor=%.0f, landing at %s, will resume %s",
+                mc.player.getY(), floor, ground, resumeTarget);
+        }
+
+        BaritoneBridge.elytraPathTo(ground);
+        landTicks = 0;
+        to(Phase.VOID_LAND);
+    }
+
+    /**
+     * Waits out the descent onto the spot the guard picked, then goes straight back up.
+     *
+     * <p>No resupply here: nothing was low, the flight was simply pointed at nothing. Once
+     * there is ground underfoot the only thing owed is a takeoff.
+     */
+    private void voidLand() {
+        if (!mc.player.onGround()) {
+            if (++landTicks > LANDING_TIMEOUT) {
+                warning("Could not reach ground before the void.");
+                landTicks = 0;
+                to(Phase.IDLE);
+            }
+            return;
+        }
+
+        landTicks = 0;
+        BaritoneBridge.cancel();
+        info("Clear of the void.");
+        to(Phase.TAKEOFF);
     }
 
     /**
