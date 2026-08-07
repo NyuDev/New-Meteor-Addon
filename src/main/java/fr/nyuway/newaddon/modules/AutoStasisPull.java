@@ -68,6 +68,9 @@ public class AutoStasisPull extends Module {
         .defaultValue(true)
         .build());
 
+    /** Ticks a second pull is refused after one goes out, however this module gets ticked. */
+    private static final int REFIRE_GUARD = 20 * 10;
+
     private final Setting<Boolean> debug = sgGeneral.add(new BoolSetting.Builder()
         .name("debug")
         .description("Write the exact trigger - health, height, who was near - to the game log. " +
@@ -181,6 +184,8 @@ public class AutoStasisPull extends Module {
     private final Deque<Long> popTimes = new ArrayDeque<>();
 
     private int ticks;
+    /** Tick the last pull went out on, or -1 when none has. */
+    private int firedAtTick = -1;
     /** Tick to recount the inventory on, or -1 when no recount is pending. */
     private int recountAtTick = -1;
 
@@ -193,6 +198,7 @@ public class AutoStasisPull extends Module {
     public void onActivate() {
         ticks = 0;
         recountAtTick = -1;
+        firedAtTick = -1;
         popTimes.clear();
 
         // Looked up by name, not by class: AutoLog has moved package between Meteor
@@ -242,7 +248,9 @@ public class AutoStasisPull extends Module {
         // not save you from void damage - it kills through them - so there is nothing to
         // weigh up: either the pull happens now or it does not happen.
         if (voidTrigger.get() && mc.player.getY() < voidThreshold()) {
-            fire("falling out of the world", String.format("y %.0f", mc.player.getY()));
+            fire("falling out of the world",
+                String.format("y %.1f, void damage below %.0f in %s", mc.player.getY(),
+                    voidThreshold(), mc.level.dimension()));
             return;
         }
 
@@ -298,8 +306,19 @@ public class AutoStasisPull extends Module {
      *               screenshotted, and a height or a name is most of a location
      */
     private void fire(String reason, String detail) {
+        // Toggling off from inside an event handler does not stop this tick's dispatch, and
+        // apparently not the next few either: one fall into the void fired this thirteen
+        // times in a second and a half. Only StasisPull's own cooldown kept that from being
+        // thirteen messages to the bot. A guard here does not depend on the toggle landing.
+        if (firedAtTick != -1 && ticks - firedAtTick < REFIRE_GUARD) return;
+        firedAtTick = ticks;
+
         warning("Pulling out: %s.", reason);
-        if (debug.get()) NewAddon.LOG.info("[AutoStasisPull] pulling out: " + detail);
+
+        // Not behind the debug switch: this decision costs whatever trip you were on, and
+        // being unable to say afterwards why it fired is worse than a line in the log.
+        NewAddon.LOG.info("[AutoStasisPull] pulling out: " + reason + " (" + detail + ")");
+
         Modules.get().get(StasisPull.class).pull();
         if (toggleOff.get()) toggle();
     }
