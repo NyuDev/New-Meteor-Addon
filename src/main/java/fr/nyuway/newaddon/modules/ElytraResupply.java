@@ -101,6 +101,13 @@ public class ElytraResupply extends Module {
     /** Baritone's terrain clearance for elytra paths; the only lever on how high it flies. */
     private static final String AVOIDANCE = "elytraMinimumAvoidance";
 
+    /** Relaunches from one spot before walking somewhere else, and before giving up. */
+    private static final int RELAUNCH_BEFORE_WALK = 2;
+    private static final int RELAUNCH_GIVEUP = 6;
+
+    /** Beyond this a goal cannot be a destination in this world; 2b2t's border is 30M. */
+    private static final double MAX_TRAVEL_DIST = 30_000_000.0;
+
     /** Ticks spent walking off a bad takeoff spot before trying again. */
     private static final int REPOSITION_TICKS = 20 * 8;
 
@@ -172,6 +179,10 @@ public class ElytraResupply extends Module {
     private boolean returnTried;
     /** Ticks spent on the ground while a trip is unfinished, before relaunching. */
     private int groundTicks;
+    /** Consecutive relaunches that never got us off the ground. */
+    private int relaunchTries;
+    /** World the destination was captured in. */
+    private Object lastLevel;
     /** Edge detection for the manual trigger key. */
     private boolean triggerHeld;
     /**
@@ -259,6 +270,7 @@ public class ElytraResupply extends Module {
         localPass = false;
         stranded = false;
         returnTried = false;
+        relaunchTries = 0;
         landTicks = 0;
         groundTicks = 0;
 
@@ -288,6 +300,20 @@ public class ElytraResupply extends Module {
     @EventHandler
     private void onTick(TickEvent.Pre event) {
         if (mc.player == null || mc.level == null || !BaritoneBridge.isUsable()) return;
+
+        // A destination belongs to the world it was captured in. Being pulled out of the End
+        // by a stasis chamber leaves a goal that is now tens of millions of blocks away and
+        // can never be reached or "arrived" at - which is a relaunch that never stops.
+        if (mc.level != lastLevel) {
+            lastLevel = mc.level;
+            if (resumeTarget != null) {
+                if (cfg.debug.get()) log("world changed; dropping the old destination %s", resumeTarget);
+                resumeTarget = null;
+            }
+            relaunchTries = 0;
+            if (phase != Phase.IDLE) abort();
+            return;
+        }
 
         // The moment the player grabs the controls mid-routine, bow out entirely and give the
         // controls back. Scoped to an active routine so ordinary flight is left alone.
@@ -478,6 +504,8 @@ public class ElytraResupply extends Module {
         if (!mc.player.onGround()) {
             elytraWasActive = true;
             groundTicks = 0;
+            // Off the ground for real, so whatever it took worked and the count starts over.
+            relaunchTries = 0;
             return;
         }
 
@@ -511,6 +539,22 @@ public class ElytraResupply extends Module {
             if (cfg.autoRelaunch.get() && !arrived()) {
                 if (++groundTicks < cfg.relaunchDelay.get()) return;
                 groundTicks = 0;
+
+                // Repeating something that did not work is not persistence. After a few tries
+                // the spot is the problem, so walk; after a few more, stop and say so rather
+                // than loop until someone notices.
+                if (++relaunchTries > RELAUNCH_GIVEUP) {
+                    if (relaunchTries == RELAUNCH_GIVEUP + 1) {
+                        warning("Cannot get airborne here; stopping. Move somewhere open and "
+                            + "toggle me off and on.");
+                    }
+                    return;
+                }
+                if (relaunchTries > RELAUNCH_BEFORE_WALK) {
+                    if (cfg.debug.get()) log("relaunch %d failed; walking first", relaunchTries);
+                    to(Phase.REPOSITION);
+                    return;
+                }
 
                 // Clear whatever the process thinks it is doing first. A run that believes it
                 // is mid-flight while standing still will not accept a fresh destination, and
@@ -1207,9 +1251,14 @@ public class ElytraResupply extends Module {
     }
 
     private void takeoff() {
-        if (mc.player.isFallFlying()) {
+        // Both conditions, not just the flag. While stuck the server keeps reporting us as
+        // gliding, so isFallFlying alone declared success the instant this phase began: no
+        // jump was ever sent, RESUME reset everything, and the whole thing started over - a
+        // thousand times over, without once trying to move somewhere better.
+        if (mc.player.isFallFlying() && !mc.player.onGround()) {
             mc.options.keyJump.setDown(false);
             takeoffFailures = 0;
+            relaunchTries = 0;
             to(Phase.RESUME);
             return;
         }
@@ -1569,8 +1618,11 @@ public class ElytraResupply extends Module {
 
     /** True for a destination far enough off to be the trip, not a landing spot. */
     private boolean isRealTravelGoal(BlockPos dest) {
-        return dest.distSqr(mc.player.blockPosition())
-            > (double) RETARGET_MIN_DIST * RETARGET_MIN_DIST;
+        double away = Math.sqrt(dest.distSqr(mc.player.blockPosition()));
+
+        // Far enough to be a trip, near enough to be real. Anything past the world border is
+        // a leftover from another dimension, where the same numbers mean somewhere else.
+        return away > RETARGET_MIN_DIST && away < MAX_TRAVEL_DIST;
     }
 
     /**
