@@ -81,8 +81,12 @@ public class ElytraResupply extends Module {
      */
     private static final int RETARGET_MIN_DIST = 256;
 
-    /** Ticks spent chasing a dropped item before writing it off and carrying on. */
-    private static final int COLLECT_GIVEUP = 160;
+    /**
+     * Ticks spent chasing a dropped item before writing it off and carrying on. Generous:
+     * what is on the ground is an ender chest or a full shulker, and eight seconds of walking
+     * over broken End terrain was not enough to reach one.
+     */
+    private static final int COLLECT_GIVEUP = 20 * 30;
 
     /** Ticks of jump attempts before a stuck takeoff is given up rather than hopping forever. */
     private static final int TAKEOFF_GIVEUP = 60;
@@ -164,6 +168,8 @@ public class ElytraResupply extends Module {
     private boolean localPass;
     /** Set when a run failed for want of supplies, which is its own reason to log out. */
     private boolean stranded;
+    /** Guards the abort-time shulker return, so a failing return cannot loop. */
+    private boolean returnTried;
     /** Ticks spent on the ground while a trip is unfinished, before relaunching. */
     private int groundTicks;
     /** Edge detection for the manual trigger key. */
@@ -252,6 +258,7 @@ public class ElytraResupply extends Module {
         repairSettleUntil = 0;
         localPass = false;
         stranded = false;
+        returnTried = false;
         landTicks = 0;
         groundTicks = 0;
 
@@ -429,7 +436,13 @@ public class ElytraResupply extends Module {
     /** True on ticks where an action is allowed, so clicks are paced rather than instant. */
     private boolean ready() {
         int delay = cfg.actionDelay.get();
-        return delay <= 0 || phaseTicks % delay == 1;
+        if (delay <= 0) return true;
+
+        // The wait applies before the first action of a phase too, not only between actions.
+        // Firing on tick one meant a phase change cost nothing, so a whole run - place, open,
+        // take, place, open - went past in a single second with the server never given room
+        // to disagree with any of it.
+        return phaseTicks >= delay && phaseTicks % delay == 0;
     }
 
     // --- trigger ------------------------------------------------------------
@@ -770,6 +783,20 @@ public class ElytraResupply extends Module {
         }
 
         if (!ready()) return;
+
+        // Check there is somewhere to stand it before pulling it out. Finding out afterwards
+        // means holding a box that came from someone's storage, with the chest about to be
+        // broken and no phase left that puts it back - which is exactly how an unrelated
+        // shulker ends up in the inventory for good.
+        if (shulkerPos == null) {
+            shulkerPos = new SpotFinder(mc, cfg.searchRadius.get(), cfg.voidClearance.get(),
+                chestPos, null).find(true);
+            if (shulkerPos == null) {
+                error("Nowhere safe to put a shulker down here.");
+                abort();
+                return;
+            }
+        }
 
         int dest = Containers.findEmptyInPlayerPart(menu);
         if (dest == -1) {
@@ -1287,6 +1314,20 @@ public class ElytraResupply extends Module {
             to(Phase.BREAK_SHULKER);
             return;
         }
+
+        // Holding a box taken out of the chest, with the chest still standing. Put it back
+        // before breaking anything: it is not ours, it is full of someone's supplies, and
+        // once the chest is gone there is nowhere left to return it to. Tried once - if the
+        // return itself fails there is nothing further to try.
+        if (!returnTried && shulkerHomeSlot != -1 && chestPos != null
+            && !mc.level.getBlockState(chestPos).isAir()
+            && InvUtils.find(this::isWantedShulker).found()) {
+            returnTried = true;
+            if (cfg.debug.get()) log("aborting while holding a shulker; returning it first");
+            to(Phase.RETURN_SHULKER);
+            return;
+        }
+
         if (chestPos != null && !mc.level.getBlockState(chestPos).isAir()) {
             to(Phase.BREAK_CHEST);
             return;
