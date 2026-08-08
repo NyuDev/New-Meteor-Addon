@@ -118,6 +118,27 @@ public final class Containers {
         return -1;
     }
 
+    /**
+     * The menu slot showing a given inventory index, or -1 when this menu does not show it.
+     *
+     * <p>The two numberings disagree, and not in a way that lines up: a container menu lists its
+     * own slots, then the three storage rows - inventory indices 9 to 35 - and only then the
+     * hotbar, indices 0 to 8. So the hotbar, which is first in the inventory, is last in the menu.
+     *
+     * <p>Needed because an inventory index is the only thing about a stack that survives a
+     * container being closed and reopened, which is what following one particular shulker box
+     * through a run requires.
+     */
+    public static int playerSlotId(AbstractContainerMenu menu, int inventoryIndex) {
+        int base = containerSize(menu);
+        if (inventoryIndex < 0 || inventoryIndex >= 36) return -1;
+
+        int id = inventoryIndex >= 9
+            ? base + (inventoryIndex - 9)
+            : base + 27 + inventoryIndex;
+        return id < menu.slots.size() ? id : -1;
+    }
+
     /** First empty player-inventory slot in this menu, or -1. */
     public static int findEmptyInPlayerPart(AbstractContainerMenu menu) {
         for (int i = containerSize(menu); i < menu.slots.size(); i++) {

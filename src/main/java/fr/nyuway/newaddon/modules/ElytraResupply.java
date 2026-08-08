@@ -216,6 +216,23 @@ public class ElytraResupply extends Module {
     /** Bottles on us at the last push, and pushes that changed nothing, so a stuck move is seen. */
     private int lastPushCount = -1;
     private int pushAttempts;
+
+    /**
+     * Inventory slots that held a shulker box before this run borrowed one, so the borrowed one
+     * can be told from the player's own.
+     *
+     * <p>Identity by exclusion, and by slot rather than by contents. Contents were what the run
+     * used to match on, and they change the moment anything is taken out of the box - so after
+     * the emptying, the repair and the break, the only shulker it could still recognise was
+     * somebody else's. It put one of the player's own boxes into their ender chest.
+     *
+     * <p>The player's own boxes are never touched, so they never move; ours is whichever one is
+     * in a slot that was not holding a shulker before. The snapshot is retaken whenever ours is
+     * out of the inventory - placed as a block, or about to be - so it is always current.
+     */
+    private java.util.Set<Integer> foreignShulkers = new java.util.HashSet<>();
+    /** Inventory index of the box this run borrowed, or -1 while it is not on us. */
+    private int ourShulkerSlot = -1;
     /** Total XP when the last bottle was thrown, and the tick to read it back on. */
     private int xpSnapshot = -1;
     private int xpCheckAt = -1;
@@ -330,6 +347,8 @@ public class ElytraResupply extends Module {
         warnedNoRoom = false;
         lastPushCount = -1;
         pushAttempts = 0;
+        foreignShulkers.clear();
+        ourShulkerSlot = -1;
         PlayerInv.closeInventory(mc);
 
         if (walkingToDrop) {
@@ -1008,12 +1027,17 @@ public class ElytraResupply extends Module {
 
         AbstractContainerMenu menu = mc.player.containerMenu;
 
-        // Already holding the shulker we picked on a previous pass through this phase. Match on
-        // its contents, not just "a shulker": a spare box we already carried must not stand in.
-        if (shulkerHomeSlot != -1 && Containers.findInPlayerPart(menu, this::isWantedShulker) != -1) {
-            mc.player.closeContainer();
-            to(Phase.PLACE_SHULKER);
-            return;
+        // Already holding the box picked on a previous pass. Identified by the slot it arrived
+        // in rather than by what is inside it: a box we already carried must never stand in for
+        // the one taken from the chest, and once bottles come out of ours, contents no longer
+        // tell the two apart.
+        if (shulkerHomeSlot != -1) {
+            if (!holdingOurShulker()) ourShulkerSlot = newShulkerSlot();
+            if (ourShulkerSlot != -1) {
+                mc.player.closeContainer();
+                to(Phase.PLACE_SHULKER);
+                return;
+            }
         }
 
         int from = findUsefulShulker(menu);
@@ -1052,18 +1076,23 @@ public class ElytraResupply extends Module {
             }
         }
 
-        int dest = Containers.findEmptyInPlayerPart(menu);
-        if (dest == -1) {
+        if (Containers.findEmptyInPlayerPart(menu) == -1) {
             error("No free inventory slot for the shulker.");
             abort();
             return;
         }
 
         shulkerHomeSlot = from;
-        // Remember what this box holds so PLACE_SHULKER puts down this exact one.
         wantedShulkerItem = firstNeededContentIn(menu.slots.get(from).getItem());
         triedShulkerSlots.add(from);
-        Containers.moveStack(menu, from, dest);
+
+        // Everything holding a shulker right now is the player's own. Whatever holds one on the
+        // next tick and did not before is the box we are about to take, and that is how it stays
+        // identified for the rest of the run.
+        foreignShulkers = shulkerSlots();
+        ourShulkerSlot = -1;
+
+        Containers.quickMove(menu, from);
     }
 
     private void placeShulker() {
@@ -1081,17 +1110,36 @@ public class ElytraResupply extends Module {
             return;
         }
 
-        FindItemResult shulker = InvUtils.findInHotbar(this::isWantedShulker);
-        if (!shulker.found()) {
-            if (!PlayerInv.moveToHotbar(mc, this::isWantedShulker)) {
-                // Hotbar is likely packed with fireworks; open a slot and retry next tick.
+        // The borrowed box, by slot. Asking for "a shulker whose contents look right" is what put
+        // one of the player's own boxes down, and later into their ender chest.
+        if (!holdingOurShulker()) ourShulkerSlot = newShulkerSlot();
+        if (ourShulkerSlot == -1) {
+            error("Lost track of the shulker taken from the chest.");
+            abort();
+            return;
+        }
+
+        if (ourShulkerSlot >= PlayerInv.HOTBAR_SIZE) {
+            // Has to be on the bar to be placed. A shift-click in the player's own menu moves a
+            // stack from the pack to the bar, so the box keeps being the one we mean.
+            if (PlayerInv.firstEmptyHotbarSlot(mc) == -1) {
                 if (PlayerInv.freeHotbarSlot(mc, loans)) return;
                 error("Could not get the shulker into the hotbar.");
                 abort();
+                return;
+            }
+            if (PlayerInv.openInventory(mc)) {
+                InvUtils.shiftClick().slotId(PlayerInv.inventoryIndexToMenuSlot(ourShulkerSlot));
+                ourShulkerSlot = -1;
             }
             return;
         }
 
+        PlayerInv.closeInventory(mc);
+        InvUtils.swap(ourShulkerSlot, false);
+
+        FindItemResult shulker = new FindItemResult(ourShulkerSlot,
+            mc.player.getInventory().getItem(ourShulkerSlot).getCount());
         Interactions.place(shulkerPos, shulker, true, cfg.silentRotations.get(), true, true);
     }
 
@@ -1345,32 +1393,46 @@ public class ElytraResupply extends Module {
 
         AbstractContainerMenu menu = mc.player.containerMenu;
 
-        if (shulkerHomeSlot != -1 && shulkerHomeSlot < menu.slots.size()
-            && Containers.isShulker(menu.slots.get(shulkerHomeSlot).getItem())) {
-            // Shulker is safely back. If we still need something, keep the chest open and grab another.
+        if (!holdingOurShulker()) ourShulkerSlot = newShulkerSlot();
+
+        // Done when the borrowed box is off us - which is the real question, and not the one this
+        // used to ask. It checked whether the chest slot held "a shulker", so one of the player's
+        // own boxes landing there read as success, and the box that came out of the chest stayed
+        // in their inventory while one of theirs went in.
+        if (ourShulkerSlot == -1) {
             if (stillNeedSupplies()) {
                 shulkerHomeSlot = -1;
                 shulkerPos = null;
                 to(Phase.TAKE_SHULKER);
             } else {
                 mc.player.closeContainer();
-                to(needMending && PlayerInv.count(mc, Items.EXPERIENCE_BOTTLE) > 0 ? Phase.REPAIR : Phase.BREAK_CHEST);
+                to(needMending && PlayerInv.count(mc, Items.EXPERIENCE_BOTTLE) > 0
+                    ? Phase.REPAIR : Phase.BREAK_CHEST);
             }
             return;
         }
 
         if (!ready()) return;
 
-        int from = Containers.findInPlayerPart(menu, Containers::isShulker);
-        if (from == -1) {
-            // Nothing left to put back; move on rather than spin here.
+        if (Containers.findEmptyInContainer(menu) == -1) {
+            problem("No room in the ender chest for the shulker; keeping it.");
             mc.player.closeContainer();
             to(Phase.BREAK_CHEST);
             return;
         }
 
-        int dest = shulkerHomeSlot != -1 ? shulkerHomeSlot : Containers.findEmptyInContainer(menu);
-        Containers.moveStack(menu, from, dest);
+        int slot = Containers.playerSlotId(menu, ourShulkerSlot);
+        if (slot == -1) {
+            problem("Could not reach the shulker to put it back; keeping it.");
+            mc.player.closeContainer();
+            to(Phase.BREAK_CHEST);
+            return;
+        }
+
+        // Shift-clicked, so it lands in the chest's first free slot rather than a slot we name.
+        // The one it came out of is free by definition, and which of them it ends up in matters
+        // far less than it being the right box.
+        Containers.quickMove(menu, slot);
     }
 
     /** Mines a block we placed and waits until the drop is actually back in the inventory. */
@@ -1426,7 +1488,17 @@ public class ElytraResupply extends Module {
         // in the inventory is useless when a spare is being carried - which is the normal
         // case - because the answer is yes whether or not the dropped one was ever picked up.
         // That is why collection looked fine while the chest stayed on the ground.
-        if (phaseTicks <= 1) collectBaseline = PlayerInv.countMatching(mc, expected);
+        if (phaseTicks <= 1) {
+            collectBaseline = PlayerInv.countMatching(mc, expected);
+
+            // Ours is standing in the world at this point, so every shulker on us is the
+            // player's own. Whichever slot has gained one by the time this phase is done is the
+            // box we just broke, and that is what goes back in the chest - not a lookalike.
+            if (phase == Phase.BREAK_SHULKER) {
+                foreignShulkers = shulkerSlots();
+                ourShulkerSlot = -1;
+            }
+        }
 
         if (mc.level.getBlockState(pos).isAir()) {
             // Give the item entity a moment to fly into us before declaring anything.
@@ -1804,6 +1876,31 @@ public class ElytraResupply extends Module {
 
     /** True for a shulker holding the supply we pulled this box for, so PLACE_SHULKER can tell it
      *  apart from any unrelated shulker already in the inventory. */
+    /** Inventory slots holding a shulker box right now. */
+    private java.util.Set<Integer> shulkerSlots() {
+        java.util.Set<Integer> out = new java.util.HashSet<>();
+        var inv = mc.player.getInventory();
+        for (int i = 0; i < PlayerInv.MAIN_SIZE; i++) {
+            if (Containers.isShulker(inv.getItem(i))) out.add(i);
+        }
+        return out;
+    }
+
+    /** The shulker that has appeared since the snapshot - ours - by inventory index, or -1. */
+    private int newShulkerSlot() {
+        var inv = mc.player.getInventory();
+        for (int i = 0; i < PlayerInv.MAIN_SIZE; i++) {
+            if (Containers.isShulker(inv.getItem(i)) && !foreignShulkers.contains(i)) return i;
+        }
+        return -1;
+    }
+
+    /** Whether the borrowed box is still where we last saw it. */
+    private boolean holdingOurShulker() {
+        return ourShulkerSlot != -1
+            && Containers.isShulker(mc.player.getInventory().getItem(ourShulkerSlot));
+    }
+
     private boolean isWantedShulker(ItemStack stack) {
         if (!Containers.isShulker(stack)) return false;
         if (wantedShulkerItem == null) return true;

@@ -229,6 +229,23 @@ Its colour sits with Meteor's own, in **Config → Visual → `enemy-color`**, r
 `friend-color`, and it is read fresh each frame: change the swatch and the names and the skull
 follow immediately.
 
+## 2b2tInvFix
+
+Two things the client does that 2b2t will not accept, stopped before it does them. Brought over
+from BepHax, where they were worked out. Neither is a cheat: each one prevents a desync you pay
+for with a kick or a ghosted item.
+
+- **`prevent-full-container-clicks`** — a shift-click is dropped when the half of the window it
+  would move the stack into has neither an empty slot nor a matching stack with room. Cancelled
+  at the click, not at the packet: the client acts first and tells the server after, so stopping
+  only the packet would leave the client showing a move the server never heard of.
+- **`fix-unstackable-dragging`** — a drag carrying something unstackable is swallowed. A drag
+  spreads the cursor stack over the slots it crosses, which a pickaxe cannot do; what you are
+  left looking at is a ghost.
+
+Off by default, and deliberately so: both are wrong on a normal server, where a shift-click into
+a full container is simply a shift-click into a full container.
+
 ## FriendSync
 
 Keeps one friend list across the clients you switch between. There is no shared file and no
