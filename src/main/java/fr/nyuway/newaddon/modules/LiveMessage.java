@@ -1,8 +1,7 @@
 package fr.nyuway.newaddon.modules;
 
 import fr.nyuway.newaddon.NewAddon;
-import fr.nyuway.newaddon.gui.DmScreen;
-import meteordevelopment.meteorclient.gui.GuiThemes;
+import fr.nyuway.newaddon.gui.live.LiveScreen;
 import fr.nyuway.newaddon.modules.dm.DmPatterns;
 import fr.nyuway.newaddon.modules.dm.LiveStore;
 import fr.nyuway.newaddon.utils.Profiles;
@@ -147,7 +146,7 @@ public class LiveMessage extends Module {
 
         boolean down = openKey.get().isSet() && openKey.get().isPressed();
         if (down && !keyHeld && mc.screen == null) {
-            mc.setScreen(new DmScreen(GuiThemes.get(), this, store, null));
+            mc.setScreen(new LiveScreen(this, store));
         }
         keyHeld = down;
     }
