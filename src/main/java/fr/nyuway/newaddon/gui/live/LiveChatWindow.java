@@ -50,6 +50,13 @@ public class LiveChatWindow extends LiveWindow {
         this.minW = 280;
         this.w = 420;
         this.h = 260;
+        restorePlace("chat:" + peer, screenWidth, screenHeight);
+    }
+
+    @Override
+    public void mouseReleased() {
+        super.mouseReleased();
+        rememberPlace("chat:" + peer);
     }
 
     public String name() {
@@ -148,8 +155,11 @@ public class LiveChatWindow extends LiveWindow {
             String day = DAY.format(when);
             if (!day.equals(lastDay)) {
                 lastDay = day;
+                // Upstream draws these grey 64, which on its grey 36 history box is very
+                // nearly invisible - as the first screenshot showed. Lifted to 150: still
+                // clearly a separator rather than a message, but readable.
                 c.text(day, x + BOX_X + 4, y + BOX_Y + 5 + LINE * row,
-                    LiveCanvas.withAlpha(LiveColors.rgb(64, 64, 64), alpha));
+                    LiveCanvas.withAlpha(LiveColors.rgb(150, 150, 150), alpha));
                 row++;
                 if (row >= lines) break;
             }

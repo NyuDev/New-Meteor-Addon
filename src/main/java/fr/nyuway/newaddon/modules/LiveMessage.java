@@ -176,6 +176,12 @@ public class LiveMessage extends Module {
             info("New conversation with %s.", hit.peer());
         }
 
+        // Always written to the game log, even when hidden from chat. Hiding a message from
+        // the feed is a display choice; losing the record of it is not the same thing, and
+        // the log is where you go when you need to know what was actually said.
+        NewAddon.LOG.info("[messages] {} {}: {}",
+            isIncoming ? "<-" : "->", hit.peer(), hit.text());
+
         if (hideFromChat.get()) event.cancel();
     }
 

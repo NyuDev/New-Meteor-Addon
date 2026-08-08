@@ -52,6 +52,30 @@ public class LiveWindow {
 
     private final long opened = System.currentTimeMillis();
 
+    /**
+     * Where each kind of window was last left, kept for the session.
+     *
+     * <p>Dragging a window somewhere and finding it back in the middle next time is the sort
+     * of thing that makes a tool feel disposable. Keyed by a string the subclass chooses, so
+     * every conversation remembers its own spot rather than sharing one.
+     */
+    private static final java.util.Map<String, int[]> PLACES = new java.util.HashMap<>();
+
+    protected void restorePlace(String key, int screenWidth, int screenHeight) {
+        int[] p = PLACES.get(key);
+        if (p == null) return;
+
+        x = p[0];
+        y = p[1];
+        w = Math.max(minW, p[2]);
+        h = Math.max(minH, p[3]);
+        keepOnScreen(screenWidth, screenHeight);
+    }
+
+    protected void rememberPlace(String key) {
+        PLACES.put(key, new int[]{x, y, w, h});
+    }
+
     protected final List<LiveButton> buttons = new ArrayList<>();
 
     /** A flat button, drawn the way upstream draws them: grey 64, grey 96 under the cursor. */
@@ -189,7 +213,18 @@ public class LiveWindow {
         c.box(x, y, w, TITLEBAR, LiveCanvas.withAlpha(foreground, alpha));
         c.text(title, x + 5, y + 5, LiveCanvas.withAlpha(0xFFFFFF, alpha));
 
-        if (closeButton) c.box(x + w - 13, y + 3, 11, 11, LiveCanvas.withAlpha(BACKGROUND, alpha));
+        if (closeButton) {
+            c.box(x + w - 13, y + 3, 11, 11, LiveCanvas.withAlpha(BACKGROUND, alpha));
+
+            // A cross, drawn rather than blitted. Upstream's icons.png holds the friend,
+            // block and colour glyphs but not this one, and two diagonals of pixels need no
+            // texture, no atlas and no per-version blit signature.
+            int cross = LiveCanvas.withAlpha(0xFFFFFF, alpha);
+            for (int i = 0; i < 5; i++) {
+                c.box(x + w - 11 + i, y + 5 + i, 1, 1, cross);
+                c.box(x + w - 7 - i, y + 5 + i, 1, 1, cross);
+            }
+        }
 
         // Resize grip: upstream draws a half-square triangle; stepped rows read the same at
         // this size and need no geometry the canvas does not already have.

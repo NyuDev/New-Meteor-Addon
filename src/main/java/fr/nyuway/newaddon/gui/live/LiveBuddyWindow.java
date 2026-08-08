@@ -41,6 +41,13 @@ public class LiveBuddyWindow extends LiveWindow {
         this.minW = 140;
         this.x = 8;
         this.y = 8;
+        restorePlace("buddies", screenWidth, screenHeight);
+    }
+
+    @Override
+    public void mouseReleased() {
+        super.mouseReleased();
+        rememberPlace("buddies");
     }
 
     public void scroll(int lines) {
@@ -95,8 +102,15 @@ public class LiveBuddyWindow extends LiveWindow {
             c.box(x + PAD + 2, rowY + 4, 5, 5, LiveCanvas.withAlpha(
                 online ? LiveColors.rgb(60, 148, 100) : LiveColors.rgb(80, 80, 80), alpha));
 
+            // Colour means "here now". Everyone offline greys out, so the list answers the
+            // question it is actually opened to answer - who can I reach - at a glance,
+            // rather than being a wall of colour where every name competes equally.
+            int nameColor = online
+                ? LiveColors.windowColor(store, peer)
+                : LiveColors.rgb(110, 110, 110);
+
             c.text(store.nameOf(peer), x + PAD + 11, rowY + 3,
-                LiveCanvas.withAlpha(LiveColors.windowColor(store, peer), alpha));
+                LiveCanvas.withAlpha(nameColor, alpha));
         }
 
         c.unclip();
