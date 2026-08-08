@@ -174,6 +174,16 @@ public class LiveMessage extends Module {
     private java.util.Set<String> knownFriends;
 
     /**
+     * Names read out of the tab list this session, so someone who logs off in the middle of a
+     * conversation does not turn back into eight characters of their UUID - which is also the
+     * name a reply would then be addressed to.
+     *
+     * <p>Memory only, never written: a settings file means a conversation, and someone whose name
+     * was merely drawn in a list is not one.
+     */
+    private final java.util.Map<java.util.UUID, String> seenNames = new java.util.HashMap<>();
+
+    /**
      * The colour an enemy's name is drawn in, read fresh each time from Meteor's config tab where
      * it sits beside the friend colour. Not cached: changing a swatch there should show here on
      * the next frame, not the next time a window is opened.
@@ -427,7 +437,7 @@ public class LiveMessage extends Module {
 
     public boolean isFriend(java.util.UUID peer) {
         return meteordevelopment.meteorclient.systems.friends.Friends.get()
-            .get(store.nameOf(peer)) != null;
+            .get(displayName(peer)) != null;
     }
 
     /**
@@ -439,7 +449,7 @@ public class LiveMessage extends Module {
      */
     public void toggleFriend(java.util.UUID peer) {
         var friends = meteordevelopment.meteorclient.systems.friends.Friends.get();
-        String name = store.nameOf(peer);
+        String name = displayName(peer);
         var existing = friends.get(name);
 
         if (existing != null) {
@@ -472,7 +482,7 @@ public class LiveMessage extends Module {
         settings.isBlocked = !settings.isBlocked;
         store.saveSettings(peer, settings);
 
-        String name = store.nameOf(peer);
+        String name = displayName(peer);
         info(settings.isBlocked ? "Ignoring %s." : "No longer ignoring %s.", name);
 
         if (ignoreMode.get() == IgnoreMode.Server) {
@@ -499,7 +509,7 @@ public class LiveMessage extends Module {
         var settings = store.settingsOf(peer);
         settings.isMuted = !settings.isMuted;
         store.saveSettings(peer, settings);
-        info(settings.isMuted ? "Muted %s." : "Unmuted %s.", store.nameOf(peer));
+        info(settings.isMuted ? "Muted %s." : "Unmuted %s.", displayName(peer));
     }
 
     /** Whether this person is on the addon's enemy list, by their current name. */
@@ -529,20 +539,36 @@ public class LiveMessage extends Module {
     }
 
     /**
-     * What to print for someone.
+     * Who someone is - the one place that answers it, for printing and for addressing a whisper.
      *
-     * <p>The stored last-known name first, then the tab list. Without the second the new
-     * server section would be a column of UUID fragments: those players have no settings
-     * file yet precisely because they have never been spoken to.
+     * <p>The tab list first, because for anyone online it is the current fact: a player who has
+     * renamed keeps their UUID and their thread, and the name written down beside that thread is
+     * whatever they were called last time. Only when they are not on the server does the stored
+     * name answer, since then there is nothing better and it is at least who they were.
+     *
+     * <p>The UUID fragment at the end is a last resort and should not be reachable from anything
+     * the user sees. It was: the store's own {@code nameOf} stops at the stored name, so opening a
+     * conversation with someone never messaged showed eight hex characters and, worse, addressed
+     * the reply to them.
      */
     public String displayName(java.util.UUID peer) {
-        var settings = store.settingsOf(peer);
-        if (settings.lastName != null && !settings.lastName.isBlank()) return settings.lastName;
-
         if (mc.getConnection() != null) {
             var info = mc.getConnection().getPlayerInfo(peer);
-            if (info != null) return Profiles.nameOf(info.getProfile());
+            if (info != null) {
+                String name = Profiles.nameOf(info.getProfile());
+                if (name != null && !name.isBlank()) {
+                    seenNames.put(peer, name);
+                    return name;
+                }
+            }
         }
+
+        String seen = seenNames.get(peer);
+        if (seen != null) return seen;
+
+        String last = store.lastNameOf(peer);
+        if (last != null) return last;
+
         return peer.toString().substring(0, 8);
     }
 

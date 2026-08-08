@@ -197,8 +197,17 @@ public class LiveChatWindow extends LiveWindow {
         if (selecting) input.drag(mouseX, mouseY);
     }
 
+    /**
+     * Who this conversation is with.
+     *
+     * <p>Asked of the module, not of the store. The store only knows the name it last wrote down,
+     * and it has written nothing about someone you have never messaged - which is exactly who you
+     * reach by clicking a name in the server section. It answered with the first eight characters
+     * of their UUID, and since this is also the name a reply is addressed to, the whisper went out
+     * to a player who does not exist.
+     */
     public String name() {
-        return store.nameOf(peer);
+        return module.displayName(peer);
     }
 
     public void type(char c) {

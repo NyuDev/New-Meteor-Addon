@@ -142,10 +142,18 @@ public final class LiveStore {
         return ids;
     }
 
-    public String nameOf(UUID id) {
+    /**
+     * The last name written down for someone, or null when nothing has been.
+     *
+     * <p>Null rather than a stand-in on purpose. This used to hand back the first eight
+     * characters of the UUID, which reads like a name, was drawn as one, and was addressed a
+     * whisper as one - so a conversation with anybody never messaged before went out to a player
+     * who does not exist. Who someone is now is a question for {@code LiveMessage.displayName},
+     * which can see the tab list; all this knows is who they were.
+     */
+    public String lastNameOf(UUID id) {
         PeerSettings s = peers.get(id);
-        return s != null && s.lastName != null && !s.lastName.isBlank()
-            ? s.lastName : id.toString().substring(0, 8);
+        return s != null && s.lastName != null && !s.lastName.isBlank() ? s.lastName : null;
     }
 
     public PeerSettings settingsOf(UUID id) {
