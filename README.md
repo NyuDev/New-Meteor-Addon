@@ -171,10 +171,19 @@ the tracking instead of counting as a teleport.
 
 ## LiveMessage
 
-Whispers kept as conversations instead of lines that scroll away, after rebane2001's
-Livemessage. Messages are collected out of chat, stored per server under
-`new-addon/messages/`, and shown in a window with one thread per person. Replies go through
-the server's own `/msg`, so nobody else needs anything installed.
+Whispers kept as conversations instead of lines that scroll away. This is rebane2001's
+[Livemessage](https://github.com/rebane2001/livemessage) (Unlicense) brought over to Meteor:
+its storage layout, keyed the way it keys it, in the place it puts it —
+`meteor-client/livemessage/{messages,settings,patterns}`, one `<player-uuid>.jsonl` per
+conversation. Existing history opens straight away, and this can run alongside another
+Livemessage port without the two disagreeing.
+
+Its GUI could not come over: the original is Forge 1.12.2 and draws with `GuiScreen` and
+`Tessellator`, which do not exist on any version here. That layer is Meteor widgets instead.
+Replies go through the server's own `/msg`, so nobody else needs anything installed.
+
+Conversations are keyed by UUID, not name — a rename does not split a thread, and a recycled
+name does not merge two people.
 
 There is no flag on the wire saying "this is a whisper" — vanilla renders the line from a
 translation key and every server with its own format sends something else. So detection is by
@@ -187,8 +196,7 @@ build. Group 1 is the other person, group 2 is the text.
 | `send-command` | `/msg` | How a reply is sent. |
 | `hide-from-chat` | off | Keep matched whispers out of the chat feed. |
 | `announce` | on | Say in chat when a new conversation starts. |
-| `history-limit` | 500 | Messages kept per conversation in memory; the file keeps them all. |
-| `incoming` / `outgoing` | vanilla + common | Detection patterns. |
+| `incoming` / `outgoing` | vanilla + common | Detection patterns, on top of Livemessage's own `patterns/*.txt`. |
 
 ## ElytraResupply
 

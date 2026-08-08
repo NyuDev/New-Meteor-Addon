@@ -84,4 +84,35 @@ public final class DmPatterns {
     public boolean isEmpty() {
         return compiled.isEmpty();
     }
+
+    /**
+     * Adds the lines of one of Livemessage's own pattern files, if it is there.
+     *
+     * <p>Upstream keeps custom server formats in {@code patterns/fromPatterns.txt} and
+     * {@code patterns/toPatterns.txt}. Anyone who has already taught it about a server should
+     * not have to teach this too.
+     */
+    public void addFile(java.nio.file.Path file,
+                        java.util.function.BiConsumer<String, String> onBad) {
+        if (!java.nio.file.Files.isRegularFile(file)) return;
+
+        try {
+            for (String line : java.nio.file.Files.readAllLines(file)) {
+                String source = line.trim();
+                if (source.isEmpty()) continue;
+                try {
+                    Pattern p = Pattern.compile(source);
+                    if (p.matcher("").groupCount() < 2) {
+                        onBad.accept(source, "needs two groups: who, then what");
+                        continue;
+                    }
+                    compiled.add(p);
+                } catch (PatternSyntaxException e) {
+                    onBad.accept(source, e.getDescription());
+                }
+            }
+        } catch (java.io.IOException ignored) {
+            // Unreadable is the same as absent here: the built-in patterns still apply.
+        }
+    }
 }

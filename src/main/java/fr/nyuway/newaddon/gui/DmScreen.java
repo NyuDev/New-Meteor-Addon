@@ -1,7 +1,9 @@
 package fr.nyuway.newaddon.gui;
 
 import fr.nyuway.newaddon.modules.LiveMessage;
-import fr.nyuway.newaddon.modules.dm.DmStore;
+import fr.nyuway.newaddon.modules.dm.LiveStore;
+
+import java.util.UUID;
 import meteordevelopment.meteorclient.gui.GuiTheme;
 import meteordevelopment.meteorclient.gui.WindowScreen;
 import meteordevelopment.meteorclient.gui.widgets.containers.WHorizontalList;
@@ -41,14 +43,14 @@ public class DmScreen extends WindowScreen {
     private static final int SHOWN = 60;
 
     private final LiveMessage module;
-    private final DmStore store;
+    private final LiveStore store;
 
-    private String selected;
+    private UUID selected;
     private int shownCount = -1;
     /** The reply box of the open conversation, so a draft can be dropped when switching. */
     private WTextBox reply;
 
-    public DmScreen(GuiTheme theme, LiveMessage module, DmStore store, String selected) {
+    public DmScreen(GuiTheme theme, LiveMessage module, LiveStore store, UUID selected) {
         super(theme, "Messages");
         this.module = module;
         this.store = store;
@@ -57,7 +59,7 @@ public class DmScreen extends WindowScreen {
 
     @Override
     public void initWidgets() {
-        List<String> peers = store.peers();
+        List<UUID> peers = store.peers();
         if (selected == null && !peers.isEmpty()) selected = peers.get(0);
         shownCount = selected == null ? -1 : store.thread(selected).size();
 
@@ -80,17 +82,18 @@ public class DmScreen extends WindowScreen {
         if (now != shownCount) reload();
     }
 
-    private void buildPeerList(WVerticalList side, List<String> peers) {
+    private void buildPeerList(WVerticalList side, List<UUID> peers) {
         side.add(theme.label("Conversations", true));
         side.add(theme.horizontalSeparator());
 
         if (peers.isEmpty()) {
             side.add(theme.label("Nothing yet."));
         } else {
-            for (String peer : peers) {
+            for (UUID peer : peers) {
+                String name = store.nameOf(peer);
                 // A marker rather than a colour: the theme owns colours, and a button that
                 // reads differently when selected works in every one of them.
-                WButton open = side.add(theme.button(peer.equals(selected) ? "> " + peer : peer))
+                WButton open = side.add(theme.button(peer.equals(selected) ? "> " + name : name))
                     .expandX().widget();
                 open.action = () -> {
                     discardDraft();
@@ -107,9 +110,18 @@ public class DmScreen extends WindowScreen {
             String name = newPeer.get().trim();
             if (name.isEmpty()) return;
 
-            store.touch(name);
+            UUID found = store.findByName(name);
+            if (found == null) found = module.resolveName(name);
+            if (found == null) {
+                // Without a UUID there is nowhere to file it, and inventing one would put the
+                // thread somewhere Livemessage itself would never look.
+                newPeer.set("");
+                return;
+            }
+
+            store.settingsOf(found).lastName = name;
             discardDraft();
-            selected = name;
+            selected = found;
             newPeer.set("");
             reload();
         };
@@ -121,22 +133,22 @@ public class DmScreen extends WindowScreen {
             return;
         }
 
-        pane.add(theme.label(selected, true));
+        pane.add(theme.label(store.nameOf(selected), true));
         pane.add(theme.horizontalSeparator());
 
-        List<DmStore.DmMessage> thread = store.thread(selected);
+        List<LiveStore.Entry> thread = store.thread(selected);
         if (thread.isEmpty()) {
             pane.add(theme.label("No messages yet."));
             return;
         }
 
-        List<DmStore.DmMessage> shown =
+        List<LiveStore.Entry> shown =
             thread.subList(Math.max(0, thread.size() - SHOWN), thread.size());
 
-        for (DmStore.DmMessage m : shown) {
-            String who = m.incoming() ? selected : "you";
-            pane.add(theme.label("[" + CLOCK.format(new Date(m.time())) + "] " + who + ": "
-                + m.text(), BUBBLE_WIDTH));
+        for (LiveStore.Entry m : shown) {
+            String who = m.sentByMe ? "you" : store.nameOf(selected);
+            pane.add(theme.label("[" + CLOCK.format(new Date(m.timestamp)) + "] " + who + ": "
+                + m.message, BUBBLE_WIDTH));
         }
     }
 
@@ -149,11 +161,12 @@ public class DmScreen extends WindowScreen {
             return;
         }
 
-        reply = bar.add(theme.textBox("", "reply to " + selected + "...")).expandX().widget();
+        String name = store.nameOf(selected);
+        reply = bar.add(theme.textBox("", "reply to " + name + "...")).expandX().widget();
         reply.setFocused(true);
 
         WTextBox box = reply;
-        String to = selected;
+        String to = name;
 
         // Clearing the box first is what makes this safe to call twice. Meteor runs
         // actionOnUnfocused from setFocused as well as from its Enter handler, and Enter goes

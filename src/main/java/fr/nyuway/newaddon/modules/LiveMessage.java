@@ -3,7 +3,8 @@ package fr.nyuway.newaddon.modules;
 import fr.nyuway.newaddon.NewAddon;
 import fr.nyuway.newaddon.gui.DmScreen;
 import fr.nyuway.newaddon.modules.dm.DmPatterns;
-import fr.nyuway.newaddon.modules.dm.DmStore;
+import fr.nyuway.newaddon.modules.dm.LiveStore;
+import fr.nyuway.newaddon.utils.Profiles;
 import meteordevelopment.meteorclient.events.game.ReceiveMessageEvent;
 import meteordevelopment.meteorclient.events.world.TickEvent;
 import meteordevelopment.meteorclient.gui.GuiThemes;
@@ -18,8 +19,6 @@ import meteordevelopment.meteorclient.systems.modules.Module;
 import meteordevelopment.meteorclient.utils.misc.Keybind;
 import meteordevelopment.meteorclient.utils.player.ChatUtils;
 import meteordevelopment.orbit.EventHandler;
-import net.minecraft.client.multiplayer.ServerData;
-
 import java.util.List;
 
 /**
@@ -93,7 +92,7 @@ public class LiveMessage extends Module {
         .defaultValue(DmPatterns.DEFAULT_OUTGOING)
         .build());
 
-    private final DmStore store = new DmStore(500);
+    private final LiveStore store = new LiveStore();
 
     private DmPatterns in;
     private DmPatterns out;
@@ -122,6 +121,12 @@ public class LiveMessage extends Module {
         out = new DmPatterns(outgoing.get(), (p, why) ->
             error("Outgoing pattern rejected (%s): %s", why, p));
 
+        // Whatever has already been taught to Livemessage itself applies here too.
+        in.addFile(store.folder().resolve("patterns").resolve("fromPatterns.txt"),
+            (p, why) -> error("fromPatterns.txt rejected (%s): %s", why, p));
+        out.addFile(store.folder().resolve("patterns").resolve("toPatterns.txt"),
+            (p, why) -> error("toPatterns.txt rejected (%s): %s", why, p));
+
         if (in.isEmpty() && out.isEmpty()) {
             warning("No usable patterns; nothing will be collected.");
         }
@@ -131,12 +136,12 @@ public class LiveMessage extends Module {
     private void onTick(TickEvent.Pre event) {
         if (mc.player == null) return;
 
-        // The store is per server: conversations from one place have no business showing up
-        // in another, and the file is named after where they happened.
-        String server = currentServer();
-        if (!server.equals(openedFor)) {
-            openedFor = server;
-            store.openFor(server);
+        // Loaded once. Unlike my first cut this is not per server: upstream files a
+        // conversation under the player's UUID, not the address it happened on, so the same
+        // person is one thread wherever you meet them.
+        if (openedFor == null) {
+            openedFor = "loaded";
+            store.loadIndex();
             compilePatterns();
         }
 
@@ -158,14 +163,44 @@ public class LiveMessage extends Module {
         if (hit == null) hit = out.match(line);
         if (hit == null) return;
 
-        boolean isNew = store.thread(hit.peer()).isEmpty();
-        store.record(hit.peer(), isIncoming, hit.text());
+        java.util.UUID peer = resolveName(hit.peer());
+        if (peer == null) {
+            // No UUID means no key, and keying by name is what makes a rename split a thread.
+            if (announce.get()) warning("Cannot place a message from %s: unknown player.", hit.peer());
+            return;
+        }
+
+        boolean isNew = store.thread(peer).isEmpty();
+        store.record(peer, hit.peer(), !isIncoming, hit.text(), selfId());
 
         if (isIncoming && isNew && announce.get()) {
             info("New conversation with %s.", hit.peer());
         }
 
         if (hideFromChat.get()) event.cancel();
+    }
+
+    /**
+     * Resolves a name to the UUID a conversation is filed under.
+     *
+     * <p>The tab list first, since that is authoritative for anyone online. Failing that, a
+     * conversation already on disk whose last known name matches - which is how a reply to
+     * someone who has since logged off still lands in the right thread.
+     */
+    public java.util.UUID resolveName(String name) {
+        if (mc.getConnection() != null) {
+            var info = mc.getConnection().getPlayerInfo(name);
+            if (info != null) return Profiles.idOf(info.getProfile());
+        }
+        return store.findByName(name);
+    }
+
+    private java.util.UUID selfId() {
+        return mc.player == null ? null : mc.player.getUUID();
+    }
+
+    public LiveStore store() {
+        return store;
     }
 
     /** Sends a reply through the server's own command, and records it straight away. */
@@ -177,18 +212,9 @@ public class LiveMessage extends Module {
 
         ChatUtils.sendPlayerMsg(command + " " + peer + " " + text);
 
-        // Recorded here rather than waiting for the echo: not every server echoes a whisper
-        // back, and a reply missing from your own history is the one thing this must not do.
-        // A server that does echo is matched by the outgoing patterns and would double it, so
-        // those default to the formats that pair with the incoming ones.
-        store.record(peer, false, text);
+        // Not recorded here: every server this targets echoes your own whisper back, and the
+        // outgoing patterns catch that echo. Writing it now as well would file every reply
+        // twice - which the previous cut of this did.
     }
 
-    private String currentServer() {
-        if (mc.getCurrentServer() != null) {
-            ServerData data = mc.getCurrentServer();
-            if (data.ip != null && !data.ip.isBlank()) return data.ip;
-        }
-        return "singleplayer";
-    }
 }
