@@ -3,8 +3,8 @@ package fr.nyuway.newaddon.gui;
 import fr.nyuway.newaddon.modules.LiveMessage;
 import fr.nyuway.newaddon.modules.dm.DmStore;
 import meteordevelopment.meteorclient.gui.GuiTheme;
-import meteordevelopment.meteorclient.gui.WidgetScreen;
-import meteordevelopment.meteorclient.gui.widgets.containers.WTable;
+import meteordevelopment.meteorclient.gui.WindowScreen;
+import meteordevelopment.meteorclient.gui.widgets.containers.WHorizontalList;
 import meteordevelopment.meteorclient.gui.widgets.containers.WVerticalList;
 import meteordevelopment.meteorclient.gui.widgets.input.WTextBox;
 import meteordevelopment.meteorclient.gui.widgets.pressable.WButton;
@@ -16,13 +16,29 @@ import java.util.List;
 /**
  * The message window: who you have talked to on the left, the conversation on the right.
  *
- * <p>Rebuilt rather than updated in place. Meteor's widgets have no notion of a list whose
- * contents changed, so a message arriving while the window is open would otherwise not show
- * until it was reopened - and a window that silently goes stale is worse than no window.
+ * <h2>Why WindowScreen</h2>
+ * {@link meteordevelopment.meteorclient.gui.WidgetScreen} is the bare canvas - widgets land in
+ * the top-left corner over the game with no frame, no background and nothing to drag, which is
+ * not a window so much as text sprayed across the screen. {@code WindowScreen} is what every
+ * one of Meteor's own screens extends, and it supplies the frame.
+ *
+ * <h2>Rebuilt, not updated</h2>
+ * Meteor's widgets have no notion of a list whose contents changed, so a message arriving while
+ * the window is open would otherwise not appear until it was reopened. The tick compares the
+ * thread length and calls {@code reload()}, which runs {@link #initWidgets()} again.
  */
-public class DmScreen extends WidgetScreen {
+public class DmScreen extends WindowScreen {
 
     private static final SimpleDateFormat CLOCK = new SimpleDateFormat("HH:mm");
+
+    /** Width the window asks for, so the two panes are not squeezed into a column. */
+    private static final double WIDTH = 620;
+
+    /** Width a message wraps at, leaving the conversation list its share. */
+    private static final double BUBBLE_WIDTH = 380;
+
+    /** Messages shown at once. The file keeps everything; a window does not need to. */
+    private static final int SHOWN = 60;
 
     private final LiveMessage module;
     private final DmStore store;
@@ -39,20 +55,20 @@ public class DmScreen extends WidgetScreen {
         this.selected = selected;
     }
 
-    /**
-     * Called by the screen itself, and again by {@link #reload()}. Everything is rebuilt from
-     * the store each time, so there is no separate path for "the list changed".
-     */
     @Override
     public void initWidgets() {
         List<String> peers = store.peers();
         if (selected == null && !peers.isEmpty()) selected = peers.get(0);
         shownCount = selected == null ? -1 : store.thread(selected).size();
 
-        WTable root = add(theme.table()).expandX().widget();
+        WHorizontalList body = add(theme.horizontalList()).expandX().minWidth(WIDTH).widget();
 
-        buildPeerList(root, peers);
-        buildThread(root);
+        buildPeerList(body.add(theme.verticalList()).top().widget(), peers);
+        body.add(theme.verticalSeparator());
+        buildThread(body.add(theme.verticalList()).top().expandX().widget());
+
+        add(theme.horizontalSeparator()).expandX();
+        buildReplyBar();
     }
 
     @Override
@@ -64,30 +80,18 @@ public class DmScreen extends WidgetScreen {
         if (now != shownCount) reload();
     }
 
-    /**
-     * Throws away whatever is half-typed before the conversation changes.
-     *
-     * <p>Losing focus is enough to fire the send, so without this, typing a message and then
-     * clicking a different name would deliver it to whoever you clicked away from - which is
-     * the one mistake a messaging window must never make.
-     */
-    private void discardDraft() {
-        if (reply != null) reply.set("");
-    }
-
-    private void buildPeerList(WTable root, List<String> peers) {
-        WVerticalList side = root.add(theme.verticalList()).widget();
-
+    private void buildPeerList(WVerticalList side, List<String> peers) {
         side.add(theme.label("Conversations", true));
+        side.add(theme.horizontalSeparator());
 
         if (peers.isEmpty()) {
             side.add(theme.label("Nothing yet."));
         } else {
             for (String peer : peers) {
-                // The marker, not a colour: the theme owns colours, and a button that reads
-                // differently when selected works in every one of them.
-                String label = peer.equals(selected) ? "> " + peer : "  " + peer;
-                WButton open = side.add(theme.button(label)).widget();
+                // A marker rather than a colour: the theme owns colours, and a button that
+                // reads differently when selected works in every one of them.
+                WButton open = side.add(theme.button(peer.equals(selected) ? "> " + peer : peer))
+                    .expandX().widget();
                 open.action = () -> {
                     discardDraft();
                     selected = peer;
@@ -102,6 +106,7 @@ public class DmScreen extends WidgetScreen {
         newPeer.actionOnUnfocused = () -> {
             String name = newPeer.get().trim();
             if (name.isEmpty()) return;
+
             store.touch(name);
             discardDraft();
             selected = name;
@@ -110,11 +115,9 @@ public class DmScreen extends WidgetScreen {
         };
     }
 
-    private void buildThread(WTable root) {
-        WVerticalList pane = root.add(theme.verticalList()).expandX().widget();
-
+    private void buildThread(WVerticalList pane) {
         if (selected == null) {
-            pane.add(theme.label("Pick someone on the left, or type a name."));
+            pane.add(theme.label("Pick someone on the left, or type a name below it."));
             return;
         }
 
@@ -124,17 +127,29 @@ public class DmScreen extends WidgetScreen {
         List<DmStore.DmMessage> thread = store.thread(selected);
         if (thread.isEmpty()) {
             pane.add(theme.label("No messages yet."));
-        } else {
-            for (DmStore.DmMessage m : thread) {
-                String who = m.incoming() ? selected : "you";
-                pane.add(theme.label("[" + CLOCK.format(new Date(m.time())) + "] "
-                    + who + ": " + m.text()));
-            }
+            return;
         }
 
-        pane.add(theme.horizontalSeparator());
+        List<DmStore.DmMessage> shown =
+            thread.subList(Math.max(0, thread.size() - SHOWN), thread.size());
 
-        reply = pane.add(theme.textBox("", "reply...")).expandX().widget();
+        for (DmStore.DmMessage m : shown) {
+            String who = m.incoming() ? selected : "you";
+            pane.add(theme.label("[" + CLOCK.format(new Date(m.time())) + "] " + who + ": "
+                + m.text(), BUBBLE_WIDTH));
+        }
+    }
+
+    private void buildReplyBar() {
+        WHorizontalList bar = add(theme.horizontalList()).expandX().widget();
+
+        if (selected == null) {
+            bar.add(theme.label("No conversation selected."));
+            reply = null;
+            return;
+        }
+
+        reply = bar.add(theme.textBox("", "reply to " + selected + "...")).expandX().widget();
         reply.setFocused(true);
 
         WTextBox box = reply;
@@ -153,6 +168,17 @@ public class DmScreen extends WidgetScreen {
         };
 
         reply.actionOnUnfocused = send;
-        pane.add(theme.button("Send")).widget().action = send;
+        bar.add(theme.button("Send")).widget().action = send;
+    }
+
+    /**
+     * Throws away whatever is half-typed before the conversation changes.
+     *
+     * <p>Losing focus is enough to fire the send, so without this, typing a message and then
+     * clicking a different name would deliver it to whoever you clicked away from - which is
+     * the one mistake a messaging window must never make.
+     */
+    private void discardDraft() {
+        if (reply != null) reply.set("");
     }
 }
