@@ -169,6 +169,27 @@ Teleport detection compares your position tick to tick rather than reading the p
 packet, whose API was reworked in 1.21.2. A world change (portal, respawn, reconnect) resets
 the tracking instead of counting as a teleport.
 
+## LiveMessage
+
+Whispers kept as conversations instead of lines that scroll away, after rebane2001's
+Livemessage. Messages are collected out of chat, stored per server under
+`new-addon/messages/`, and shown in a window with one thread per person. Replies go through
+the server's own `/msg`, so nobody else needs anything installed.
+
+There is no flag on the wire saying "this is a whisper" — vanilla renders the line from a
+translation key and every server with its own format sends something else. So detection is by
+pattern, and the patterns are settings: an unrecognised server needs one line added, not a new
+build. Group 1 is the other person, group 2 is the text.
+
+| Setting | Default | |
+| --- | --- | --- |
+| `open-key` | unbound | Opens the message window, while the module is on. |
+| `send-command` | `/msg` | How a reply is sent. |
+| `hide-from-chat` | off | Keep matched whispers out of the chat feed. |
+| `announce` | on | Say in chat when a new conversation starts. |
+| `history-limit` | 500 | Messages kept per conversation in memory; the file keeps them all. |
+| `incoming` / `outgoing` | vanilla + common | Detection patterns. |
+
 ## ElytraResupply
 
 Baritone's elytra process lands when it runs out of fireworks or the elytra wears out — on a
