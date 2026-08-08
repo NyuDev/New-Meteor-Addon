@@ -143,6 +143,18 @@ public class ElytraResupply extends Module {
     /** Ticks spent failing to free a hotbar slot before opening with whatever is in hand. */
     private static final int EMPTY_HAND_GIVEUP = 40;
 
+    /** Ticks the inventory screen stays up after the last move made from it. */
+    private static final int INVENTORY_IDLE = 10;
+
+    /**
+     * Attempts at one container move before it is written off.
+     *
+     * <p>A move that has not taken after this many tries at {@code action-delay} apart is not
+     * going to: the stack is stuck, the container is fuller than it looks, or the server is
+     * refusing. Two hundred silent retries and a phase timeout was how that used to read.
+     */
+    private static final int MOVE_ATTEMPTS = 6;
+
     /** How far off the setup block counts as having been pushed rather than having stepped. */
     private static final double PUSH_TOLERANCE = 1.6;
 
@@ -201,6 +213,9 @@ public class ElytraResupply extends Module {
     private int stillTicks;
     /** Said once per run: the pack is full and there is no junk in it to throw away. */
     private boolean warnedNoRoom;
+    /** Bottles on us at the last push, and pushes that changed nothing, so a stuck move is seen. */
+    private int lastPushCount = -1;
+    private int pushAttempts;
     /** Total XP when the last bottle was thrown, and the tick to read it back on. */
     private int xpSnapshot = -1;
     private int xpCheckAt = -1;
@@ -313,6 +328,9 @@ public class ElytraResupply extends Module {
         groundTicks = 0;
         stillTicks = 0;
         warnedNoRoom = false;
+        lastPushCount = -1;
+        pushAttempts = 0;
+        PlayerInv.closeInventory(mc);
 
         if (walkingToDrop) {
             BaritoneBridge.cancel();
@@ -392,6 +410,11 @@ public class ElytraResupply extends Module {
 
         holdPosition();
         parkView();
+
+        // The inventory screen the moves are made from puts itself away shortly after the last
+        // of them, so it is never left up in front of a phase that wants to click the world.
+        PlayerInv.setUseInventoryScreen(cfg.openInventory.get());
+        PlayerInv.closeInventoryWhenIdle(mc, INVENTORY_IDLE);
 
         if (++phaseTicks > PHASE_TIMEOUT) {
             if (phase == Phase.REPOSITION) {
@@ -896,6 +919,8 @@ public class ElytraResupply extends Module {
             return;
         }
 
+        PlayerInv.closeInventory(mc);
+
         // Through Interactions so the rotation honours silent-rotations; BlockUtils.place
         // can only turn the visible camera.
         Interactions.place(chestPos, chest, true, cfg.silentRotations.get(), true, true);
@@ -919,6 +944,11 @@ public class ElytraResupply extends Module {
         // An empty hand first. A held item turns the right-click into a use of that item, and
         // servers that check for it refuse the open outright rather than quietly doing both.
         if (cfg.emptyHandToOpen.get() && !emptyHand()) return;
+
+        // Nothing in front of us when we reach for the block: the inventory may still be up from
+        // arranging the hotbar a moment ago, and clicking the world through it is exactly the
+        // pair of things a player never does at once.
+        PlayerInv.closeInventory(mc);
 
         // Faces the block first. Opening a container the server thinks we are not looking at
         // is one of the plainest anticheat flags there is.
@@ -1084,17 +1114,17 @@ public class ElytraResupply extends Module {
         AbstractContainerMenu menu = mc.player.containerMenu;
 
         if (needMending && PlayerInv.count(mc, Items.EXPERIENCE_BOTTLE) < cfg.xpBottles.get()) {
-            if (pullOne(menu, Items.EXPERIENCE_BOTTLE, false)) return;
+            if (pullOne(menu, Items.EXPERIENCE_BOTTLE)) return;
         }
         // Fireworks only once mending is finished: repairing spends the bottles and frees the
         // room the fireworks then need, so grabbing them first would just crowd the inventory.
         if (gatheringFireworks && needFireworks && PlayerInv.count(mc, Items.FIREWORK_ROCKET) < cfg.targetFireworks.get()) {
-            if (pullOne(menu, Items.FIREWORK_ROCKET, cfg.hotbarFirst.get())) return;
+            if (pullOne(menu, Items.FIREWORK_ROCKET)) return;
         }
 
         // Proactively grab a spare elytra if the current one is broken and we don't already carry one.
         if (needElytraSwap && PlayerInv.findSpareElytra(mc) == -1) {
-            if (pullOne(menu, Items.ELYTRA, false)) return;
+            if (pullOne(menu, Items.ELYTRA)) return;
         }
 
         mc.player.closeContainer();
@@ -1283,7 +1313,24 @@ public class ElytraResupply extends Module {
 
         AbstractContainerMenu menu = mc.player.containerMenu;
 
-        // Leftovers go back where they came from rather than riding along as dead weight.
+        // Leftovers go back where they came from rather than riding along as dead weight. Each
+        // push is checked against the count actually on us: a click that changed nothing means
+        // the move is not going to work, and saying so beats two hundred more of them and a
+        // timeout that names the phase but not the reason.
+        int carried = PlayerInv.count(mc, Items.EXPERIENCE_BOTTLE);
+        if (carried > 0 && carried == lastPushCount) {
+            if (++pushAttempts >= MOVE_ATTEMPTS) {
+                problem("Could not put the spare bottles back; keeping them.");
+                if (cfg.debug.get()) log("giving up on returning supplies after %d tries", pushAttempts);
+                mc.player.closeContainer();
+                to(Phase.BREAK_SHULKER);
+                return;
+            }
+        } else {
+            pushAttempts = 0;
+        }
+        lastPushCount = carried;
+
         if (pushOne(menu, Items.EXPERIENCE_BOTTLE)) return;
 
         mc.player.closeContainer();
@@ -1434,6 +1481,7 @@ public class ElytraResupply extends Module {
             if (tool.found()) InvUtils.swap(tool.slot(), false);
         }
 
+        PlayerInv.closeInventory(mc);
         Interactions.mine(mc, pos, cfg.silentRotations.get(), true);
     }
 
@@ -1641,34 +1689,28 @@ public class ElytraResupply extends Module {
     }
 
     /**
-     * Moves one stack of an item from the container into us.
+     * Takes one stack of an item out of the open container. Returns true if it acted.
      *
-     * @param preferHotbar put it on the bar if there is room there, for things that have to
-     *                     be reachable in play rather than merely carried
-     * @return true if it acted
+     * <p>Shift-clicked rather than carried across by hand. A container's shift-click fills the
+     * player's hotbar first - vanilla walks the player slots backwards and the last nine are the
+     * bar - which is where the fireworks were wanted anyway. Choosing the destination ourselves
+     * bought nothing and cost the move working at all.
      */
-    private boolean pullOne(AbstractContainerMenu menu, Item item, boolean preferHotbar) {
+    private boolean pullOne(AbstractContainerMenu menu, Item item) {
         int from = Containers.findInContainer(menu, item);
         if (from == -1) return false;
+        if (Containers.findEmptyInPlayerPart(menu) == -1) return false;
 
-        int dest = preferHotbar ? Containers.findEmptyInHotbarPart(menu) : -1;
-        if (dest == -1) dest = Containers.findEmptyInPlayerPart(menu);
-        if (dest == -1) return false;
-
-        Containers.moveStack(menu, from, dest);
-        return true;
+        return Containers.quickMove(menu, from);
     }
 
     /** Moves one stack of an item from us back into the container. Returns true if it acted. */
     private boolean pushOne(AbstractContainerMenu menu, Item item) {
         int from = Containers.findInPlayerPart(menu, item);
         if (from == -1) return false;
+        if (Containers.findEmptyInContainer(menu) == -1) return false;
 
-        int to = Containers.findEmptyInContainer(menu);
-        if (to == -1) return false;
-
-        Containers.moveStack(menu, from, to);
-        return true;
+        return Containers.quickMove(menu, from);
     }
 
     /**

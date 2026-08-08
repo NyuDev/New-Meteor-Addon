@@ -3,6 +3,7 @@ package fr.nyuway.newaddon.utils;
 import meteordevelopment.meteorclient.utils.player.FindItemResult;
 import meteordevelopment.meteorclient.utils.player.InvUtils;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.screens.inventory.InventoryScreen;
 import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.Item;
@@ -109,11 +110,69 @@ public final class PlayerInv {
         if (!found.found()) return false;
         if (found.isHotbar()) return true;
 
-        int free = firstEmptyHotbarSlot(mc);
-        if (free == -1) return false;
+        if (firstEmptyHotbarSlot(mc) == -1) return false;
+        if (!openInventory(mc)) return false;
 
-        InvUtils.move().from(found.slot()).toHotbar(free);
+        // Shift-click, not a carry: in the player's own menu that means storage to hotbar, which
+        // is the whole of the request. See Containers.quickMove for why the two-click carry
+        // never landed - the second click argues with a state id the server has moved past, and
+        // the item blinks back where it was.
+        InvUtils.shiftClick().slotId(inventoryIndexToMenuSlot(found.slot()));
         return true;
+    }
+
+    /**
+     * Puts the player's own inventory screen up, so its clicks come from somewhere.
+     *
+     * <p>Not needed by the protocol - the player's menu is always open server-side, and the
+     * clicks are accepted either way. It is needed by anyone watching: a stream of slot clicks
+     * from a client with no inventory open is not something a player can produce, and this
+     * module runs on servers where that is the sort of thing people look for.
+     *
+     * <p>Refuses while a chest or shulker is open, because putting a screen up there would close
+     * it, and the run is in the middle of using it.
+     *
+     * @return true when the inventory is up and its slots are the ones a click will reach
+     */
+    public static boolean openInventory(Minecraft mc) {
+        if (!useScreen) return true;
+        if (mc.player.containerMenu != mc.player.inventoryMenu) return false;
+        if (mc.screen == null) mc.setScreen(new InventoryScreen(mc.player));
+        if (!(mc.screen instanceof InventoryScreen)) return false;
+
+        wantedAt = mc.level == null ? 0 : mc.level.getGameTime();
+        return true;
+    }
+
+    /**
+     * Whether inventory moves put the screen up first. Static because this is static, and
+     * because it is one answer for the client rather than one per module.
+     */
+    private static boolean useScreen = true;
+
+    public static void setUseInventoryScreen(boolean value) {
+        useScreen = value;
+    }
+
+    /** Game time of the last request for the inventory screen, so it can close itself after. */
+    private static long wantedAt;
+
+    /**
+     * Closes the inventory screen once nothing has asked for it for a while.
+     *
+     * <p>Called once a tick by whatever is running, rather than by each move: a move does not
+     * know whether another is coming, and opening and closing the screen between every click
+     * would be its own kind of strange to watch.
+     */
+    public static void closeInventoryWhenIdle(Minecraft mc, int idleTicks) {
+        if (!(mc.screen instanceof InventoryScreen)) return;
+        if (mc.level != null && mc.level.getGameTime() - wantedAt < idleTicks) return;
+        mc.setScreen(null);
+    }
+
+    /** Closes the inventory screen if that is what is up, leaving any other screen alone. */
+    public static void closeInventory(Minecraft mc) {
+        if (mc.screen instanceof InventoryScreen) mc.setScreen(null);
     }
 
     /**
@@ -147,13 +206,23 @@ public final class PlayerInv {
                 || Enchants.hasSilkTouch(stack)) {
                 continue;
             }
+
+            // Where the shift-click will put it, worked out before the click rather than chosen
+            // by it: the loan has to name a slot to bring the stack back from later, and vanilla
+            // fills the pack from its first empty slot.
+            int home = -1;
             for (int j = HOTBAR_SIZE; j < MAIN_SIZE; j++) {
                 if (inv.getItem(j).isEmpty()) {
-                    InvUtils.move().fromHotbar(i).to(j);
-                    if (loans != null) loans.record(mc, i, j);
-                    return true;
+                    home = j;
+                    break;
                 }
             }
+            if (home == -1) continue;
+            if (!openInventory(mc)) return false;
+
+            InvUtils.shiftClick().slotId(inventoryIndexToMenuSlot(i));
+            if (loans != null) loans.record(mc, i, home);
+            return true;
         }
         return false;
     }

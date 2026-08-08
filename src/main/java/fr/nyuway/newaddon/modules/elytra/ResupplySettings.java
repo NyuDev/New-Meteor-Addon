@@ -27,6 +27,7 @@ public final class ResupplySettings {
     public final Setting<Integer> containerSettle;
     public final Setting<Integer> settleTicks;
     public final Setting<Boolean> makeRoom;
+    public final Setting<Boolean> openInventory;
     public final Setting<Boolean> autoTakeoff;
     public final Setting<Boolean> requireSilkTouch;
     public final Setting<Integer> voidClearance;
@@ -101,6 +102,15 @@ public final class ResupplySettings {
                          "for a while afterwards, and a chest placed during that slide is left " +
                          "behind. Twenty ticks is a second.")
             .defaultValue(20).min(0).max(200).sliderMin(0).sliderMax(60)
+            .build());
+
+        openInventory = sgGeneral.add(new BoolSetting.Builder()
+            .name("open-inventory")
+            .description("Put the inventory screen up before rearranging the hotbar, the way a " +
+                         "player would. Costs nothing on the wire - your own inventory is always " +
+                         "open server-side - but a run of slot clicks from a client with no " +
+                         "inventory showing is not something a player can produce.")
+            .defaultValue(true)
             .build());
 
         makeRoom = sgGeneral.add(new BoolSetting.Builder()

@@ -127,7 +127,37 @@ public final class Containers {
     }
 
     /**
+     * Shift-clicks a slot, the way a player moves a stack between a container and their pack.
+     *
+     * <h2>Why not pick up and put down</h2>
+     * Meteor's {@code move()} fires both clicks in the same tick, and a third if the cursor is
+     * left holding something. Every click after the first carries a state id the server has
+     * already moved past, so the server answers by sending the slot back as it really is - which
+     * is the item visibly blinking into place and out again, and a move that never happens
+     * however many times it is asked for. A phase would time out that way, having asked two
+     * hundred times and got nowhere.
+     *
+     * <p>A shift-click is one click. The server decides where the stack lands, which happens to
+     * be exactly where these callers wanted it: out of a container it fills the hotbar first, and
+     * within the player's own inventory it moves between the bar and the pack. There is nothing
+     * left for the two sides to disagree about.
+     *
+     * @return false when the slot is out of range or empty, so a caller can tell that nothing
+     *         was asked for rather than assume it was
+     */
+    public static boolean quickMove(AbstractContainerMenu menu, int slot) {
+        if (slot < 0 || slot >= menu.slots.size()) return false;
+        if (menu.slots.get(slot).getItem().isEmpty()) return false;
+
+        InvUtils.shiftClick().slotId(slot);
+        return true;
+    }
+
+    /**
      * Moves a whole stack from one menu slot to another.
+     *
+     * <p>Two clicks in one tick; see {@link #quickMove}, which is what should be used instead
+     * wherever the server's own choice of destination will do.
      *
      * @return false when either index is out of range, so callers can abort rather than fire
      *         clicks into nothing
