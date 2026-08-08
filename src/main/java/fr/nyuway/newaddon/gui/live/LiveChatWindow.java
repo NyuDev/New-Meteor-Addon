@@ -2,8 +2,10 @@ package fr.nyuway.newaddon.gui.live;
 
 import fr.nyuway.newaddon.modules.LiveMessage;
 import fr.nyuway.newaddon.modules.dm.LiveStore;
+import fr.nyuway.newaddon.utils.Enemies;
 
 import java.text.SimpleDateFormat;
+import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
 import java.util.UUID;
@@ -23,23 +25,97 @@ import java.util.UUID;
  */
 public class LiveChatWindow extends LiveWindow {
 
+    /** Meteor's friend colour, packed the way the icons want it. Asked for, never kept. */
+    private static int friendColor() {
+        var c = meteordevelopment.meteorclient.systems.config.Config.get().friendColor.get();
+        return (c.r << 16) | (c.g << 8) | c.b;
+    }
+
     private static final int BOX_X = 5;
     private static final int BOX_Y = TITLEBAR + 44;
-    private static final int INPUT_H = 13;
     private static final int SCROLLBAR_W = 10;
     private static final int LINE = 12;
 
     private static final SimpleDateFormat DAY = new SimpleDateFormat("MMMM dd, yyyy");
     private static final SimpleDateFormat CLOCK = new SimpleDateFormat("<HH:mm> ");
 
+    /** Friend heart and ignore sign, drawn as pixels since upstream's icon sheet is not loaded. */
+    private static final Icon HEART = (c, bx, by, bw, bh, color) -> {
+        int ox = bx + (bw - 7) / 2, oy = by + (bh - 6) / 2;
+        int[] rows = {0b0110110, 0b1111111, 0b1111111, 0b0111110, 0b0011100, 0b0001000};
+        for (int r = 0; r < rows.length; r++)
+            for (int i = 0; i < 7; i++)
+                if ((rows[r] & (1 << (6 - i))) != 0) c.box(ox + i, oy + r, 1, 1, color);
+    };
+
+    private static final Icon BAN = (c, bx, by, bw, bh, color) -> {
+        int ox = bx + (bw - 7) / 2, oy = by + (bh - 7) / 2;
+        int[] rows = {0b0011100, 0b0100010, 0b1000001, 0b1111111, 0b1000001, 0b0100010, 0b0011100};
+        for (int r = 0; r < rows.length; r++)
+            for (int i = 0; i < 7; i++)
+                if ((rows[r] & (1 << (6 - i))) != 0) c.box(ox + i, oy + r, 1, 1, color);
+    };
+
+    private static final Icon PIN = (c, bx, by, bw, bh, color) -> {
+        int ox = bx + (bw - 7) / 2, oy = by + (bh - 6) / 2;
+        int[] rows = {0b0011100, 0b0111110, 0b0111110, 0b0011100, 0b0001000, 0b0001000};
+        for (int r = 0; r < rows.length; r++)
+            for (int i = 0; i < 7; i++)
+                if ((rows[r] & (1 << (6 - i))) != 0) c.box(ox + i, oy + r, 1, 1, color);
+    };
+
+    /** A speaker with a cross - mute, drawn since the sound and toast are what it silences. */
+    private static final Icon MUTE = (c, bx, by, bw, bh, color) -> {
+        int ox = bx + (bw - 7) / 2, oy = by + (bh - 7) / 2;
+        int[] rows = {0b0010000, 0b0110000, 0b1110101, 0b1110010, 0b1110101, 0b0110000, 0b0010000};
+        for (int r = 0; r < rows.length; r++)
+            for (int i = 0; i < 7; i++)
+                if ((rows[r] & (1 << (6 - i))) != 0) c.box(ox + i, oy + r, 1, 1, color);
+    };
+
+    /** A skull - enemy, the opposite of the friend heart and drawn the same pixel way. */
+    private static final Icon ENEMY = (c, bx, by, bw, bh, color) -> {
+        int ox = bx + (bw - 7) / 2, oy = by + (bh - 7) / 2;
+        int[] rows = {0b0111110, 0b1111111, 0b1001001, 0b1001001, 0b1111111, 0b0111110, 0b0101010};
+        for (int r = 0; r < rows.length; r++)
+            for (int i = 0; i < 7; i++)
+                if ((rows[r] & (1 << (6 - i))) != 0) c.box(ox + i, oy + r, 1, 1, color);
+    };
+
     private final LiveMessage module;
     private final LiveStore store;
     public final UUID peer;
 
-    /** Typed reply. Kept here rather than in an EditBox, whose API moved twice across these versions. */
-    private final StringBuilder input = new StringBuilder();
+    /** The reply box: wraps, scrolls, and carries a caret, selection and clipboard of its own. */
+    private final LiveInput input = new LiveInput();
 
+    /** True while a drag begun in the reply box is extending its selection. */
+    private boolean selecting;
+
+    /** Reply-box bounds from the last draw, so a click can tell whether it landed there. */
+    private int inputTop;
+    private int inputBoxH;
+
+    /** Lines scrolled up from the bottom: 0 is the newest message, {@link #maxScroll} the oldest. */
     private int scroll;
+
+    /** Thread size at the last draw, so a message arriving pulls the view back to the newest. */
+    private int lastCount = -1;
+
+    /** Wrapped display lines, rebuilt only when the width or the message count changes. */
+    private final List<Line> wrapped = new ArrayList<>();
+    private int wrapWidth = -1;
+
+    /** Scrollbar geometry from the last draw, read by the drag that moves it. */
+    private boolean draggingBar;
+    private int trackTop;
+    private int trackH;
+    private int maxScroll;
+
+    private static final int THEIRS = 0, MINE = 1, HEADER = 2;
+
+    /** One drawn line: its text and what it is, coloured at draw time since the palette shifts. */
+    private record Line(String text, int kind) { }
 
     public LiveChatWindow(LiveMessage module, LiveStore store, UUID peer,
                           int screenWidth, int screenHeight) {
@@ -52,18 +128,73 @@ public class LiveChatWindow extends LiveWindow {
         this.h = 260;
         restorePlace("chat:" + peer, screenWidth, screenHeight);
 
-        // Upstream puts these as three icons down the right edge of the header. Same place,
-        // same order - friend, ignore - drawn as short labels since icons.png is not loaded.
-        buttons.add(new LiveButton(46, TITLEBAR + 4, 42, 11, true, "friend",
-            "Toggle friend", () -> module.toggleFriend(peer)));
-        buttons.add(new LiveButton(46, TITLEBAR + 18, 42, 11, true, "ignore",
-            "Toggle ignore", () -> module.toggleIgnore(peer)));
+        // Header toggles, left to right: friend, enemy, mute, ignore - each in its own colour
+        // while on and white while off, each with a tooltip that names what a click would do
+        // rather than the state it is already in.
+        // The heart and the skull take their colours from Meteor's config tab, so the icons agree
+        // with the names under them and with the rest of the client.
+        buttons.add(new LiveButton(60, TITLEBAR + 4, 12, 12, true, HEART,
+            () -> module.isFriend(peer), LiveChatWindow::friendColor,
+            () -> module.isFriend(peer) ? "Remove friend" : "Add friend",
+            () -> module.toggleFriend(peer)));
+        buttons.add(new LiveButton(45, TITLEBAR + 4, 12, 12, true, ENEMY,
+            () -> module.isEnemy(peer), Enemies::color,
+            () -> module.isEnemy(peer) ? "Remove enemy" : "Add enemy",
+            () -> module.toggleEnemy(peer)));
+        buttons.add(new LiveButton(30, TITLEBAR + 4, 12, 12, true, MUTE,
+            () -> module.isMuted(peer), 0x8AB4F8,
+            () -> module.isMuted(peer) ? "Unmute" : "Mute (keeps the messages, drops the notification)",
+            () -> module.toggleMute(peer)));
+        buttons.add(new LiveButton(15, TITLEBAR + 4, 12, 12, true, BAN,
+            () -> module.isIgnored(peer), 0xDC5050,
+            () -> module.isIgnored(peer) ? "Unignore" : "Ignore",
+            () -> module.toggleIgnore(peer)));
+
+        // A pin by the close cross: a pinned conversation stays open when the screen is closed and
+        // returns with it, so it need not be found in the list again.
+        buttons.add(new LiveButton(27, 3, 11, 11, true, PIN,
+            () -> module.isPinned(peer), 0xF2C94C,
+            () -> module.isPinned(peer) ? "Unpin" : "Pin (reopens after a restart)",
+            () -> module.setPinned(peer, !module.isPinned(peer))));
     }
 
     @Override
     public void mouseReleased() {
+        draggingBar = false;
+        selecting = false;
         super.mouseReleased();
         rememberPlace("chat:" + peer);
+    }
+
+    @Override
+    public boolean mouseClicked(int mouseX, int mouseY, int button) {
+        // The scrollbar is claimed before the window's own drag/resize, so a grab on it never
+        // moves the window instead.
+        if (inScrollbar(mouseX, mouseY)) {
+            draggingBar = true;
+            scrollTo(mouseY);
+            return false;
+        }
+
+        // A click in the reply box places the caret and can begin a drag-selection, ahead of the
+        // window's own drag - but not over the resize grip in the corner.
+        if (inInputArea(mouseX, mouseY) && !(mouseX > x + w - 7 && mouseY > y + h - 7)) {
+            input.click(mouseX, mouseY);
+            selecting = true;
+            return false;
+        }
+
+        boolean close = super.mouseClicked(mouseX, mouseY, button);
+        // The cross closes it for good: gone from the session and unpinned, so it does not return.
+        if (close) module.markClosed(peer);
+        return close;
+    }
+
+    @Override
+    public void mouseMoved(int mouseX, int mouseY, int screenWidth, int screenHeight) {
+        super.mouseMoved(mouseX, mouseY, screenWidth, screenHeight);
+        if (draggingBar) scrollTo(mouseY);
+        if (selecting) input.drag(mouseX, mouseY);
     }
 
     public String name() {
@@ -71,26 +202,55 @@ public class LiveChatWindow extends LiveWindow {
     }
 
     public void type(char c) {
-        input.append(c);
+        input.insert(String.valueOf(c));
     }
 
-    public void backspace() {
-        if (input.length() > 0) input.setLength(input.length() - 1);
+    /**
+     * Handles an editing key, returning true when it was one so the screen consumes it rather
+     * than letting it move focus or close - bar keys it does not know, like escape.
+     */
+    public boolean key(int keyCode, boolean ctrl, boolean shift) {
+        switch (keyCode) {
+            case 257, 335 -> send();
+            case 259 -> input.backspace();
+            case 261 -> input.delete();
+            case 263 -> input.left(ctrl, shift);
+            case 262 -> input.right(ctrl, shift);
+            case 265 -> input.up(shift);
+            case 264 -> input.down(shift);
+            case 268 -> input.home(shift);
+            case 269 -> input.end(shift);
+            case 65 -> { if (!ctrl) return false; input.selectAll(); }
+            case 67 -> { if (!ctrl) return false; input.copy(); }
+            case 86 -> { if (!ctrl) return false; input.paste(); }
+            case 88 -> { if (!ctrl) return false; input.cut(); }
+            default -> { return false; }
+        }
+        return true;
     }
 
     /** @return true when something was actually sent */
     public boolean send() {
-        String text = input.toString().trim();
+        String text = input.text().trim();
         if (text.isEmpty()) return false;
 
-        input.setLength(0);
+        input.clear();
         module.send(name(), text);
-        scroll = Integer.MAX_VALUE;
+        scroll = 0;
         return true;
     }
 
     public void scroll(int lines) {
         scroll = Math.max(0, scroll + lines);
+    }
+
+    public void scrollInput(int lines) {
+        input.scrollBy(lines);
+    }
+
+    public boolean inInputArea(int mx, int my) {
+        return mx >= x + BOX_X && mx <= x + BOX_X + (w - 10)
+            && my >= inputTop && my <= inputTop + inputBoxH;
     }
 
     @Override
@@ -107,38 +267,50 @@ public class LiveChatWindow extends LiveWindow {
         float alpha = openProgress();
         int foreground = active ? primaryColor : INACTIVE;
 
-        // Avatar block. Upstream draws the real skin face here; without a skin fetch the
-        // colour still carries the one thing it is read for - whether they are on.
-        c.box(x + 3, y + TITLEBAR + 3, 36, 36,
-            LiveCanvas.withAlpha(online ? LiveColors.rgb(60, 148, 100) : INACTIVE, alpha));
+        // Avatar block. Their head once the window has finished opening - the real skin when
+        // they are on the server, the default skin for their UUID when they are not, ringed green
+        // or grey by head() either way. A flat plate stands in only during the open fade, where a
+        // head drawn opaque would sit oddly over a window still fading up.
+        if (alpha >= 1f) {
+            c.head(peer, x + 3, y + TITLEBAR + 3, 36);
+        } else {
+            c.box(x + 3, y + TITLEBAR + 3, 36, 36,
+                LiveCanvas.withAlpha(LiveColors.rgb(50, 50, 50), alpha));
+        }
 
-        String label = name();
-        if (module.isFriend(peer)) label += " (friend)";
-        if (module.isIgnored(peer)) label += " (ignored)";
-        c.text(label, x + 42, y + TITLEBAR + 5, LiveCanvas.withAlpha(0xFFFFFF, alpha));
+        c.text(name(), x + 42, y + TITLEBAR + 5,
+            LiveCanvas.withAlpha(module.nameColor(peer), alpha));
         c.text(peer.toString(), x + 42, y + TITLEBAR + 16, LiveCanvas.withAlpha(INACTIVE, alpha));
         c.text(online ? "online" : "offline", x + 42, y + TITLEBAR + 26,
             LiveCanvas.withAlpha(INACTIVE, alpha));
 
-        int historyH = h - (BOX_Y + 10 + INPUT_H);
+        // The reply box grows with its wrapped content up to a cap that still leaves the history
+        // a few lines, then scrolls within itself. The history takes whatever is left above it.
         int grey64 = LiveColors.rgb(64, 64, 64);
+        int inW = w - 10 - 6;
+        int contentTop = y + BOX_Y;
+        int contentBottom = y + h - 5;
+        int maxInput = Math.max(1, Math.min(23, (contentBottom - contentTop) / LINE - 3));
+        int inputLines = Math.max(1, Math.min(input.wrap(inW), maxInput));
+        inputBoxH = inputLines * LINE + 4;
+        inputTop = contentBottom - inputBoxH;
+        int historyH = inputTop - 3 - contentTop;
 
-        c.box(x + BOX_X - 1, y + BOX_Y - 1, w - 10 + 2, historyH + 2,
+        c.box(x + BOX_X - 1, contentTop - 1, w - 10 + 2, historyH + 2,
             LiveCanvas.withAlpha(grey64, alpha));
-        c.box(x + BOX_X, y + BOX_Y, w - 10, historyH,
+        c.box(x + BOX_X, contentTop, w - 10, historyH,
             LiveCanvas.withAlpha(LiveColors.rgb(36, 36, 36), alpha));
 
-        int inputY = y + h - INPUT_H - 5;
-        c.box(x + BOX_X - 1, inputY - 1, w - 10 + 2, INPUT_H + 2,
+        c.box(x + BOX_X - 1, inputTop - 1, w - 10 + 2, inputBoxH + 2,
             LiveCanvas.withAlpha(grey64, alpha));
-        c.box(x + BOX_X, inputY, w - 10, INPUT_H,
+        c.box(x + BOX_X, inputTop, w - 10, inputBoxH,
             LiveCanvas.withAlpha(LiveColors.rgb(24, 24, 24), alpha));
 
         drawHistory(c, historyH, foreground, alpha);
 
-        String shown = input + (System.currentTimeMillis() % 1000 < 500 ? "_" : "");
-        c.text(shown, x + BOX_X + 3, inputY + 3,
-            LiveCanvas.withAlpha(active ? 0xFFFFFF : INACTIVE, alpha));
+        c.clip(x + BOX_X + 3, inputTop + 2, inW, inputBoxH - 4);
+        input.draw(c, x + BOX_X + 3, inputTop + 2, inputLines, active, alpha);
+        c.unclip();
     }
 
     private void drawHistory(LiveCanvas c, int historyH, int foreground, float alpha) {
@@ -150,51 +322,120 @@ public class LiveChatWindow extends LiveWindow {
             return;
         }
 
-        // Drawn newest-last from the bottom up, so the latest message is always the one in
-        // view - upstream scrolls from an index, but the effect people rely on is this.
-        int lines = Math.max(1, (historyH - 8) / LINE);
-        int end = Math.max(0, thread.size() - scroll);
-        int start = Math.max(0, end - lines);
-        if (start >= thread.size()) start = Math.max(0, thread.size() - 1);
+        // Text stops short of a reserved scrollbar column, so wrapping does not shift when the
+        // bar appears; re-wrap only on a resize or a new message, not every frame.
+        int contentW = w - 26;
+        if (thread.size() != lastCount || contentW != wrapWidth) {
+            boolean grew = thread.size() > lastCount;
+            buildWrapped(c, thread, contentW);
+            wrapWidth = contentW;
+            lastCount = thread.size();
+            if (grew) scroll = 0;
+        }
+
+        int visible = Math.max(1, (historyH - 6) / LINE);
+        maxScroll = Math.max(0, wrapped.size() - visible);
+        scroll = Math.max(0, Math.min(scroll, maxScroll));
+        trackTop = y + BOX_Y;
+        trackH = historyH;
+
+        int bottom = wrapped.size() - scroll;
+        int top = Math.max(0, bottom - visible);
 
         c.clip(x + BOX_X, y + BOX_Y, w - 10, historyH);
+        for (int i = top; i < bottom; i++) {
+            Line line = wrapped.get(i);
+            int color = line.kind() == HEADER ? LiveColors.rgb(150, 150, 150)
+                : line.kind() == MINE ? 0xFFFFFF : foreground;
+            c.text(line.text(), x + BOX_X + 4, y + BOX_Y + 4 + LINE * (i - top),
+                LiveCanvas.withAlpha(color, alpha));
+        }
+        c.unclip();
 
+        drawScrollbar(c, visible, alpha);
+    }
+
+    /** Rebuilds the wrapped lines: a date header when the day turns, then each message wrapped. */
+    private void buildWrapped(LiveCanvas c, List<LiveStore.Entry> thread, int width) {
+        wrapped.clear();
         String lastDay = null;
-        int row = 0;
-
-        for (int i = start; i < end && row < lines; i++) {
-            LiveStore.Entry entry = thread.get(i);
+        for (LiveStore.Entry entry : thread) {
             Date when = new Date(entry.timestamp);
-
             String day = DAY.format(when);
             if (!day.equals(lastDay)) {
                 lastDay = day;
-                // Upstream draws these grey 64, which on its grey 36 history box is very
-                // nearly invisible - as the first screenshot showed. Lifted to 150: still
-                // clearly a separator rather than a message, but readable.
-                c.text(day, x + BOX_X + 4, y + BOX_Y + 5 + LINE * row,
-                    LiveCanvas.withAlpha(LiveColors.rgb(150, 150, 150), alpha));
-                row++;
-                if (row >= lines) break;
+                wrapped.add(new Line(day, HEADER));
             }
+            int kind = entry.sentByMe ? MINE : THEIRS;
+            for (String piece : wrap(c, CLOCK.format(when) + entry.message, width)) {
+                wrapped.add(new Line(piece, kind));
+            }
+        }
+    }
 
-            String text = CLOCK.format(when) + entry.message;
-            c.text(text, x + BOX_X + 4, y + BOX_Y + 5 + LINE * row,
-                LiveCanvas.withAlpha(entry.sentByMe ? 0xFFFFFF : foreground, alpha));
-            row++;
+    /** Greedy word wrap to {@code width} pixels, hard-breaking a single word too long to fit. */
+    private static List<String> wrap(LiveCanvas c, String text, int width) {
+        List<String> out = new ArrayList<>();
+        if (width <= 0) {
+            out.add(text);
+            return out;
         }
 
-        c.unclip();
-
-        if (thread.size() > lines) {
-            int barH = Math.max(10, historyH * lines / thread.size());
-            int span = historyH - barH;
-            int offset = scroll >= thread.size() ? 0
-                : span - (span * scroll / Math.max(1, thread.size() - lines));
-            offset = Math.max(0, Math.min(span, offset));
-
-            c.box(x + BOX_X + w - 10 - SCROLLBAR_W, y + BOX_Y + offset, SCROLLBAR_W, barH,
-                LiveCanvas.withAlpha(LiveColors.rgb(64, 64, 64), alpha));
+        StringBuilder cur = new StringBuilder();
+        for (String word : text.split(" ", -1)) {
+            String candidate = cur.length() == 0 ? word : cur + " " + word;
+            if (c.width(candidate) <= width) {
+                cur.setLength(0);
+                cur.append(candidate);
+                continue;
+            }
+            if (cur.length() > 0) {
+                out.add(cur.toString());
+                cur.setLength(0);
+            }
+            if (c.width(word) <= width) {
+                cur.append(word);
+            } else {
+                for (int i = 0; i < word.length(); i++) {
+                    if (cur.length() > 0 && c.width(cur.toString() + word.charAt(i)) > width) {
+                        out.add(cur.toString());
+                        cur.setLength(0);
+                    }
+                    cur.append(word.charAt(i));
+                }
+            }
         }
+        if (cur.length() > 0) out.add(cur.toString());
+        if (out.isEmpty()) out.add("");
+        return out;
+    }
+
+    private void drawScrollbar(LiveCanvas c, int visible, float alpha) {
+        if (wrapped.size() <= visible) return;
+
+        int barX = x + BOX_X + (w - 10) - SCROLLBAR_W;
+        c.box(barX, trackTop, SCROLLBAR_W, trackH, LiveCanvas.withAlpha(LiveColors.rgb(28, 28, 28), alpha));
+
+        int thumbH = Math.max(12, trackH * visible / wrapped.size());
+        float p = maxScroll == 0 ? 0f : scroll / (float) maxScroll;
+        int thumbY = trackTop + Math.round((trackH - thumbH) * (1 - p));
+
+        boolean hot = draggingBar || inScrollbar(lastMouseX, lastMouseY);
+        int g = hot ? 130 : 90;
+        c.box(barX + 1, thumbY, SCROLLBAR_W - 2, thumbH,
+            LiveCanvas.withAlpha(LiveColors.rgb(g, g, g), alpha));
+    }
+
+    private boolean inScrollbar(int mx, int my) {
+        int barX = x + BOX_X + (w - 10) - SCROLLBAR_W;
+        return mx >= barX && mx <= barX + SCROLLBAR_W && my >= trackTop && my <= trackTop + trackH;
+    }
+
+    /** Maps a cursor height on the track to a scroll: the top is the oldest, the bottom the newest. */
+    private void scrollTo(int my) {
+        if (trackH <= 0) return;
+        float frac = Math.max(0f, Math.min(1f, (my - trackTop) / (float) trackH));
+        scroll = Math.round(maxScroll * (1 - frac));
+        scroll = Math.max(0, Math.min(scroll, maxScroll));
     }
 }

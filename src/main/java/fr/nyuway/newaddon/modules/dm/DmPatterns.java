@@ -35,7 +35,7 @@ public final class DmPatterns {
     public static final List<String> DEFAULT_OUTGOING = List.of(
         "^You whisper to (\\w{3,16}): (.+)$",
         "^\\[me -> (\\w{3,16})\\] (.+)$",
-        "^To (\\w{3,16}): (.+)$",
+        "^[Tt]o (\\w{3,16}): (.+)$",
         "^You -> (\\w{3,16}): (.+)$"
     );
 
@@ -49,6 +49,11 @@ public final class DmPatterns {
      * @param onBad   told about each pattern that could not be used, and why
      */
     public DmPatterns(List<String> sources, java.util.function.BiConsumer<String, String> onBad) {
+        add(sources, onBad);
+    }
+
+    /** Compiles and appends patterns, telling {@code onBad} about each that cannot be used. */
+    public void add(List<String> sources, java.util.function.BiConsumer<String, String> onBad) {
         for (String raw : sources) {
             String source = raw.trim();
             if (source.isEmpty()) continue;

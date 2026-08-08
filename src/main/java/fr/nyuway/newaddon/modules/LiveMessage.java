@@ -1,11 +1,15 @@
 package fr.nyuway.newaddon.modules;
 
 import fr.nyuway.newaddon.NewAddon;
+import fr.nyuway.newaddon.gui.live.LiveCanvas;
 import fr.nyuway.newaddon.gui.live.LiveScreen;
+import fr.nyuway.newaddon.gui.live.LiveToasts;
 import fr.nyuway.newaddon.modules.dm.DmPatterns;
 import fr.nyuway.newaddon.modules.dm.LiveStore;
+import fr.nyuway.newaddon.utils.Enemies;
 import fr.nyuway.newaddon.utils.Profiles;
 import meteordevelopment.meteorclient.events.game.ReceiveMessageEvent;
+import meteordevelopment.meteorclient.events.render.Render2DEvent;
 import meteordevelopment.meteorclient.events.world.TickEvent;
 import meteordevelopment.meteorclient.settings.BoolSetting;
 import meteordevelopment.meteorclient.settings.EnumSetting;
@@ -115,6 +119,13 @@ public class LiveMessage extends Module {
         .defaultValue(true)
         .build());
 
+    private final Setting<Boolean> notifyToast = sgPeople.add(new BoolSetting.Builder()
+        .name("notify-toast")
+        .description("Pop an advancement-style toast, top-right, when a message arrives while " +
+                     "the window is closed. Shows who it is from and a preview of what they said.")
+        .defaultValue(true)
+        .build());
+
     private final Setting<IgnoreMode> ignoreMode = sgPeople.add(new EnumSetting.Builder<IgnoreMode>()
         .name("ignore-mode")
         .description("Client hides them here only, and nobody else knows. Server runs the " +
@@ -144,11 +155,32 @@ public class LiveMessage extends Module {
         .build());
 
     private final LiveStore store = new LiveStore();
+    private final LiveToasts toasts = new LiveToasts();
+
+    /** Windows open this session; restored when the screen is reopened. Cleared by a restart. */
+    private final java.util.Set<java.util.UUID> open = new java.util.HashSet<>();
+    /** Conversations pinned to reopen after a restart too; the persisted subset of {@link #open}. */
+    private final java.util.Set<java.util.UUID> pinned = new java.util.HashSet<>();
 
     private DmPatterns in;
     private DmPatterns out;
     private boolean keyHeld;
     private String openedFor;
+
+    /**
+     * Friend names as of the last tick, so a newly added one can be told apart from one already
+     * a friend when the module turned on. Null until the first tick establishes that baseline.
+     */
+    private java.util.Set<String> knownFriends;
+
+    /**
+     * The colour an enemy's name is drawn in, read fresh each time from Meteor's config tab where
+     * it sits beside the friend colour. Not cached: changing a swatch there should show here on
+     * the next frame, not the next time a window is opened.
+     */
+    public static int enemyColor() {
+        return Enemies.color();
+    }
 
     public LiveMessage() {
         super(NewAddon.CATEGORY, "live-message",
@@ -161,6 +193,15 @@ public class LiveMessage extends Module {
         openedFor = null;
         keyHeld = false;
 
+        // Pinned conversations are the ones that survive a restart; seed the session's open
+        // windows from them, so after a restart exactly the pinned ones reopen.
+        pinned.clear();
+        pinned.addAll(store.loadPinned());
+        open.clear();
+        open.addAll(pinned);
+
+        knownFriends = null;
+
         if (!openKey.get().isSet()) {
             warning("No open-key bound; set one to reach the message window.");
         }
@@ -171,6 +212,11 @@ public class LiveMessage extends Module {
             error("Incoming pattern rejected (%s): %s", why, p));
         out = new DmPatterns(outgoing.get(), (p, why) ->
             error("Outgoing pattern rejected (%s): %s", why, p));
+
+        // Built-in formats stay on top of the settings, so a known server - 2b2t's "to name: msg"
+        // - is still read when the saved settings hold an older default list.
+        in.add(DmPatterns.DEFAULT_INCOMING, (p, why) -> { });
+        out.add(DmPatterns.DEFAULT_OUTGOING, (p, why) -> { });
 
         // Whatever has already been taught to Livemessage itself applies here too.
         in.addFile(store.folder().resolve("patterns").resolve("fromPatterns.txt"),
@@ -201,6 +247,31 @@ public class LiveMessage extends Module {
             mc.setScreen(new LiveScreen(this, store));
         }
         keyHeld = down;
+
+        syncFriends();
+    }
+
+    /**
+     * Greets anyone newly friended, however that happened - our own button, Meteor's
+     * {@code .friend add} command, or its Friends tab all end up in the same list, and none of
+     * them fire an event to hook. Polling the list once a tick and diffing it is what a
+     * greeting sent "even when added outside this menu" actually requires.
+     */
+    private void syncFriends() {
+        java.util.Set<String> names = new java.util.HashSet<>();
+        for (var friend : meteordevelopment.meteorclient.systems.friends.Friends.get()) {
+            names.add(friend.getName());
+        }
+
+        // The first tick only establishes the baseline - greeting everyone already a friend
+        // when the module happened to turn on would not be a greeting, just noise.
+        if (knownFriends != null && greetOnFriend.get() && !greeting.get().isBlank()) {
+            for (String name : names) {
+                if (!knownFriends.contains(name)) send(name, greeting.get());
+            }
+        }
+
+        knownFriends = names;
     }
 
     @EventHandler
@@ -223,7 +294,9 @@ public class LiveMessage extends Module {
 
         // An ignored conversation is still recorded - ignoring someone is about not being
         // interrupted by them, not about losing what they said.
-        boolean ignored = store.settingsOf(peer).isBlocked;
+        var settings = store.settingsOf(peer);
+        boolean ignored = settings.isBlocked;
+        boolean muted = settings.isMuted;
 
         boolean isNew = store.thread(peer).isEmpty();
         store.record(peer, hit.peer(), !isIncoming, hit.text(), selfId());
@@ -232,8 +305,18 @@ public class LiveMessage extends Module {
             info("New conversation with %s.", hit.peer());
         }
 
-        if (isIncoming && !ignored && notifySound.get() && mc.screen == null && mc.player != null) {
-            mc.player.playSound(net.minecraft.sounds.SoundEvents.EXPERIENCE_ORB_PICKUP, 1f, 1.6f);
+        // Sound and toast share one gate - a message that arrived while you were playing - so
+        // they always agree. Neither fires behind an open screen: the window itself is where a
+        // message shows once you are looking, and a toast over your own inventory is noise.
+        // Muting drops both while keeping the message: it is the notification that is turned
+        // off, not the conversation.
+        if (isIncoming && !ignored && !muted && mc.screen == null && mc.player != null) {
+            if (notifySound.get()) {
+                mc.player.playSound(net.minecraft.sounds.SoundEvents.EXPERIENCE_ORB_PICKUP, 1f, 1.6f);
+            }
+            if (notifyToast.get()) {
+                toasts.push(peer, hit.peer(), hit.text(), colorOf(peer));
+            }
         }
 
         // Always written to the game log, even when hidden from chat. Hiding a message from
@@ -243,6 +326,19 @@ public class LiveMessage extends Module {
             isIncoming ? "<-" : "->", hit.peer(), hit.text());
 
         if (hideFromChat.get() || ignored) event.cancel();
+    }
+
+    /**
+     * Draws the toasts on the HUD.
+     *
+     * <p>Meteor fires this at the tail of the in-game HUD render, so it runs while you are
+     * playing and not while a screen is up - which is exactly when a toast is wanted and the
+     * window is not. The one draw-context split at 26.1 is hidden inside {@link LiveCanvas#of}.
+     */
+    @EventHandler
+    private void onRender2D(Render2DEvent event) {
+        if (mc.screen != null) return;
+        toasts.render(LiveCanvas.of(event), event.screenWidth);
     }
 
     /**
@@ -283,12 +379,64 @@ public class LiveMessage extends Module {
         return fr.nyuway.newaddon.gui.live.LiveColors.windowColor(store, peer);
     }
 
+    /**
+     * The colour a name is drawn in - the relationship, not the identity. A stranger is white, a
+     * friend takes Meteor's friend colour, someone ignored goes red, and an enemy takes the enemy
+     * colour, which wins over the rest since it is the one worth seeing first. Whether they are on
+     * the server is carried by the head's ring instead, so the two cues never fight for the same one.
+     */
+    public int nameColor(java.util.UUID peer) {
+        if (isEnemy(peer)) return Enemies.color();
+        if (isIgnored(peer)) return 0xDC5050;
+        if (isFriend(peer)) {
+            var c = meteordevelopment.meteorclient.systems.config.Config.get().friendColor.get();
+            return (c.r << 16) | (c.g << 8) | c.b;
+        }
+        return 0xFFFFFF;
+    }
+
+    /**
+     * Whether a conversation is pinned - kept open even across a game restart, not just across
+     * closing and reopening the screen (which every open window already survives).
+     */
+    public boolean isPinned(java.util.UUID peer) {
+        return pinned.contains(peer);
+    }
+
+    public void setPinned(java.util.UUID peer, boolean value) {
+        if (value) pinned.add(peer);
+        else pinned.remove(peer);
+        store.savePinned(pinned);
+    }
+
+    /** Notes a window as open, so reopening the screen brings it back for the rest of the session. */
+    public void markOpen(java.util.UUID peer) {
+        open.add(peer);
+    }
+
+    /** A window closed by its cross: gone from the session and unpinned, so it stays gone. */
+    public void markClosed(java.util.UUID peer) {
+        open.remove(peer);
+        if (pinned.remove(peer)) store.savePinned(pinned);
+    }
+
+    /** The windows to reopen with the screen - everything open, which after a restart is the pins. */
+    public java.util.List<java.util.UUID> openPeers() {
+        return new java.util.ArrayList<>(open);
+    }
+
     public boolean isFriend(java.util.UUID peer) {
         return meteordevelopment.meteorclient.systems.friends.Friends.get()
             .get(store.nameOf(peer)) != null;
     }
 
-    /** Adds or removes the friend, and greets them if that was asked for. */
+    /**
+     * Adds or removes the friend on Meteor's own list - the one everything else reads too.
+     *
+     * <p>Friending someone drops them from the enemy list, since the two are exclusive. It is
+     * done here as well as in the watcher so the skull goes out on the same click as the heart
+     * comes on, rather than a second later.
+     */
     public void toggleFriend(java.util.UUID peer) {
         var friends = meteordevelopment.meteorclient.systems.friends.Friends.get();
         String name = store.nameOf(peer);
@@ -301,11 +449,11 @@ public class LiveMessage extends Module {
         }
 
         friends.add(new meteordevelopment.meteorclient.systems.friends.Friend(name, peer));
-        info("Added %s to friends.", name);
+        if (Enemies.remove(name)) info("Added %s to friends, and off the enemy list.", name);
+        else info("Added %s to friends.", name);
 
-        // Deliberately after the add, and only on the add: a greeting sent when someone is
-        // removed would be the opposite of what was meant.
-        if (greetOnFriend.get() && !greeting.get().isBlank()) send(name, greeting.get());
+        // Not greeted here: syncFriends() catches this add on the next tick along with any made
+        // outside this window, so there is exactly one place a greeting is ever sent from.
     }
 
     public boolean isIgnored(java.util.UUID peer) {
@@ -332,6 +480,52 @@ public class LiveMessage extends Module {
             if (!command.startsWith("/")) command = "/" + command;
             ChatUtils.sendPlayerMsg(command + " " + name);
         }
+    }
+
+    /** Whether their notifications are muted - the sound and toast held while the messages stay. */
+    public boolean isMuted(java.util.UUID peer) {
+        return store.settingsOf(peer).isMuted;
+    }
+
+    /**
+     * Toggles muting someone.
+     *
+     * <p>Unlike ignoring, nothing is hidden and nothing is recorded differently - a muted
+     * conversation reads exactly as it would otherwise, only without the sound and the toast that
+     * would otherwise announce it. It is for the person you still want to hear from, just not the
+     * moment each line lands.
+     */
+    public void toggleMute(java.util.UUID peer) {
+        var settings = store.settingsOf(peer);
+        settings.isMuted = !settings.isMuted;
+        store.saveSettings(peer, settings);
+        info(settings.isMuted ? "Muted %s." : "Unmuted %s.", store.nameOf(peer));
+    }
+
+    /** Whether this person is on the addon's enemy list, by their current name. */
+    public boolean isEnemy(java.util.UUID peer) {
+        return Enemies.isEnemy(displayName(peer));
+    }
+
+    /**
+     * Adds or removes them from the enemy list the {@code .enemy} command and colours read.
+     *
+     * <p>Making someone an enemy unfriends them - {@link Enemies#add} sees to that, so every way
+     * in agrees - and the message says so, because a heart going out on the far side of the
+     * window is not something to leave the user to notice.
+     */
+    public void toggleEnemy(java.util.UUID peer) {
+        String name = displayName(peer);
+        if (Enemies.isEnemy(name)) {
+            Enemies.remove(name);
+            info("Removed %s from enemies.", name);
+            return;
+        }
+
+        boolean wasFriend = isFriend(peer);
+        Enemies.add(name);
+        if (wasFriend) info("Added %s to enemies, and off the friend list.", name);
+        else info("Added %s to enemies.", name);
     }
 
     /**

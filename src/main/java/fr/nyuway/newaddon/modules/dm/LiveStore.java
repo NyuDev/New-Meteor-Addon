@@ -56,6 +56,8 @@ public final class LiveStore {
         public boolean isBlocked;
         public int customColor;
         public String lastName;
+        /** Muted: their messages still show and are kept, only the sound and toast are held. */
+        public boolean isMuted;
     }
 
     private final Path root;
@@ -128,9 +130,13 @@ public final class LiveStore {
         }
     }
 
-    /** Peers, most recently written first, so the list reads like a chat client's. */
+    /**
+     * Conversations, most recently written first, so the list reads like a chat client's. Keyed
+     * off the message files, not the settings files - a settings file can exist for someone a
+     * bundled port merely saw, and those are not conversations and have no place in the list.
+     */
     public List<UUID> peers() {
-        List<UUID> ids = new ArrayList<>(peers.keySet());
+        List<UUID> ids = new ArrayList<>(lastActivity.keySet());
         ids.sort((a, b) -> Long.compare(
             lastActivity.getOrDefault(b, 0L), lastActivity.getOrDefault(a, 0L)));
         return ids;
@@ -217,6 +223,40 @@ public final class LiveStore {
         try {
             Files.createDirectories(file.getParent());
             Files.writeString(file, GSON.toJson(settings), StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            NewAddon.LOG.warn("[livemessage] could not write {}: {}", file, e.toString());
+        }
+    }
+
+    /** Conversations pinned to reopen after a restart. Ours alone, kept beside upstream's files. */
+    public java.util.Set<UUID> loadPinned() {
+        java.util.Set<UUID> out = new java.util.HashSet<>();
+        Path file = root.resolve("pinned.txt");
+        if (!Files.isRegularFile(file)) return out;
+
+        try {
+            for (String line : Files.readAllLines(file, StandardCharsets.UTF_8)) {
+                String s = line.trim();
+                if (s.isEmpty()) continue;
+                try {
+                    out.add(UUID.fromString(s));
+                } catch (IllegalArgumentException ignored) {
+                    // A stray line; skip it and keep the rest.
+                }
+            }
+        } catch (IOException e) {
+            NewAddon.LOG.warn("[livemessage] could not read {}: {}", file, e.toString());
+        }
+        return out;
+    }
+
+    public void savePinned(java.util.Collection<UUID> pinned) {
+        Path file = root.resolve("pinned.txt");
+        try {
+            Files.createDirectories(root);
+            StringBuilder sb = new StringBuilder();
+            for (UUID id : pinned) sb.append(id).append('\n');
+            Files.writeString(file, sb.toString(), StandardCharsets.UTF_8);
         } catch (IOException e) {
             NewAddon.LOG.warn("[livemessage] could not write {}: {}", file, e.toString());
         }

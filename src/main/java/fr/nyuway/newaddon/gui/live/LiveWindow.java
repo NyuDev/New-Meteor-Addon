@@ -78,7 +78,17 @@ public class LiveWindow {
 
     protected final List<LiveButton> buttons = new ArrayList<>();
 
-    /** A flat button, drawn the way upstream draws them: grey 64, grey 96 under the cursor. */
+    /** A tiny pixel glyph drawn on a button, tinted by the button's live state. */
+    public interface Icon {
+        void draw(LiveCanvas c, int x, int y, int width, int height, int argb);
+    }
+
+    /**
+     * A header icon button - a friend heart, an ignore sign - that colours itself from a live
+     * bit of state: its {@code activeColor} while the thing it toggles is on, white while off,
+     * with a faint plate under the cursor. The tooltip is a supplier so it can read "Add friend"
+     * or "Remove friend" off the same state the icon is.
+     */
     public final class LiveButton {
         public final int bx;
         public final int by;
@@ -86,18 +96,36 @@ public class LiveWindow {
         public final int bh;
         /** Measured from the right edge, which is how the window's own controls are placed. */
         public final boolean fromRight;
-        public final String text;
-        public final String tooltip;
+        private final Icon icon;
+        private final java.util.function.BooleanSupplier active;
+        /**
+         * Asked each frame rather than kept, so a colour that lives in Meteor's config tab - the
+         * friend and enemy ones do - shows a change on the next frame instead of the next time
+         * the window is opened.
+         */
+        private final java.util.function.IntSupplier activeColor;
+        private final java.util.function.Supplier<String> tooltip;
         public final Runnable action;
 
-        public LiveButton(int bx, int by, int bw, int bh, boolean fromRight,
-                          String text, String tooltip, Runnable action) {
+        /** For a button whose colour is fixed. */
+        public LiveButton(int bx, int by, int bw, int bh, boolean fromRight, Icon icon,
+                          java.util.function.BooleanSupplier active, int activeColor,
+                          java.util.function.Supplier<String> tooltip, Runnable action) {
+            this(bx, by, bw, bh, fromRight, icon, active, () -> activeColor, tooltip, action);
+        }
+
+        public LiveButton(int bx, int by, int bw, int bh, boolean fromRight, Icon icon,
+                          java.util.function.BooleanSupplier active,
+                          java.util.function.IntSupplier activeColor,
+                          java.util.function.Supplier<String> tooltip, Runnable action) {
             this.bx = bx;
             this.by = by;
             this.bw = bw;
             this.bh = bh;
             this.fromRight = fromRight;
-            this.text = text;
+            this.icon = icon;
+            this.active = active;
+            this.activeColor = activeColor;
             this.tooltip = tooltip;
             this.action = action;
         }
@@ -110,15 +138,18 @@ public class LiveWindow {
             return inRect(gx(), by, bw, bh, lastMouseX, lastMouseY);
         }
 
-        public void draw(LiveCanvas c) {
-            c.box(x + gx(), y + by, bw, bh,
-                LiveCanvas.opaque(LiveColors.rgb(hovered() ? 96 : 64,
-                    hovered() ? 96 : 64, hovered() ? 96 : 64)));
+        String tooltip() {
+            return tooltip == null ? "" : tooltip.get();
+        }
 
-            if (!text.isEmpty()) {
-                c.text(text, x + gx() + bw / 2 - c.width(text) / 2, y + by,
-                    LiveCanvas.opaque(0xFFFFFF));
+        public void draw(LiveCanvas c) {
+            if (hovered()) {
+                c.box(x + gx(), y + by, bw, bh, LiveCanvas.opaque(LiveColors.rgb(72, 72, 72)));
             }
+
+            boolean on = active != null && active.getAsBoolean();
+            icon.draw(c, x + gx(), y + by, bw, bh,
+                LiveCanvas.opaque(on ? activeColor.getAsInt() : 0xFFFFFF));
         }
     }
 
@@ -240,7 +271,8 @@ public class LiveWindow {
         if (!active) return;
 
         for (LiveButton b : buttons) {
-            if (!b.tooltip.isEmpty() && b.hovered()) drawTooltip(c, b.tooltip);
+            String tip = b.tooltip();
+            if (!tip.isEmpty() && b.hovered()) drawTooltip(c, tip);
         }
     }
 

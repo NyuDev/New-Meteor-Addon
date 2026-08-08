@@ -1,5 +1,6 @@
 package fr.nyuway.newaddon.gui.live;
 
+import meteordevelopment.meteorclient.events.render.Render2DEvent;
 import net.minecraft.client.Minecraft;
 
 //? if <26.1 {
@@ -36,6 +37,9 @@ public final class LiveCanvas {
 
     private final Minecraft mc = Minecraft.getInstance();
 
+    /** Skins seen while a player was online, reused when they later go offline this session. */
+    private static final java.util.Map<java.util.UUID, Object> SKINS = new java.util.HashMap<>();
+
     //? if <26.1 {
     public LiveCanvas(GuiGraphics g) {
         this.g = g;
@@ -45,6 +49,21 @@ public final class LiveCanvas {
         this.g = g;
     }
     *///?}
+
+    /**
+     * Wraps whatever draw context Meteor hands to a {@link Render2DEvent}, so the HUD toast can
+     * be drawn with the same primitives the windows use. The field it lives in is the only thing
+     * that moved at 26.1: {@code drawContext} became {@code graphics}, one a {@code GuiGraphics}
+     * and the other a {@code GuiGraphicsExtractor}, which is exactly the split this class exists
+     * to hide.
+     */
+    public static LiveCanvas of(Render2DEvent event) {
+        //? if <26.1 {
+        return new LiveCanvas(event.drawContext);
+        //?} else {
+        /*return new LiveCanvas(event.graphics);
+        *///?}
+    }
 
     /** Filled rectangle, in ARGB. */
     public void rect(int left, int top, int right, int bottom, int argb) {
@@ -108,5 +127,52 @@ public final class LiveCanvas {
     public static int withAlpha(int rgb, float alpha) {
         int a = Math.max(0, Math.min(255, Math.round(alpha * 255f)));
         return (a << 24) | (rgb & 0x00FFFFFF);
+    }
+
+    /**
+     * Draws a player's head - face plus hat overlay - as a {@code size}-square icon, ringed green
+     * when they are on the server and grey when they are not.
+     *
+     * <p>This is where the skin API's drift is absorbed, and it is more than one change.
+     * {@code getSkinLocation} became {@code getSkin} at 1.20.2; the {@code PlayerSkin} it returns
+     * carried a plain texture until 1.21.10 folded it into a {@code ClientAsset.Texture}; and
+     * {@code PlayerFaceRenderer}, which does the face-and-hat blit for us on every obfuscated
+     * build, was dropped in 26.x - so there the two 8x8 patches of a 64x64 skin are blitted by
+     * hand, face at u=8 and hat at u=40, both v=8.
+     *
+     * <p>Offline players are not on the tab list, so their real skin is not directly to hand. A
+     * skin seen while they were online this session is remembered and reused; failing that, the
+     * default skin for their UUID stands in, so every peer shows a head rather than a hole.
+     */
+    public void head(java.util.UUID uuid, int x, int y, int size) {
+        var connection = mc.getConnection();
+        var info = connection == null ? null : connection.getPlayerInfo(uuid);
+        boolean online = info != null;
+
+        //? if <1.20.2 {
+        /*net.minecraft.resources.ResourceLocation skin;
+        if (online) { skin = info.getSkinLocation(); SKINS.put(uuid, skin); }
+        else { Object seen = SKINS.get(uuid); skin = seen != null ? (net.minecraft.resources.ResourceLocation) seen : net.minecraft.client.resources.DefaultPlayerSkin.getDefaultSkin(uuid); }
+        net.minecraft.client.gui.components.PlayerFaceRenderer.draw(g, skin, x, y, size);
+        *///?} else if <1.21.10 {
+        /*net.minecraft.client.resources.PlayerSkin skin;
+        if (online) { skin = info.getSkin(); SKINS.put(uuid, skin); }
+        else { Object seen = SKINS.get(uuid); skin = seen != null ? (net.minecraft.client.resources.PlayerSkin) seen : net.minecraft.client.resources.DefaultPlayerSkin.get(uuid); }
+        net.minecraft.client.gui.components.PlayerFaceRenderer.draw(g, skin, x, y, size);
+        *///?} else if <26.1 {
+        net.minecraft.world.entity.player.PlayerSkin skin;
+        if (online) { skin = info.getSkin(); SKINS.put(uuid, skin); }
+        else { Object seen = SKINS.get(uuid); skin = seen != null ? (net.minecraft.world.entity.player.PlayerSkin) seen : net.minecraft.client.resources.DefaultPlayerSkin.get(uuid); }
+        net.minecraft.client.gui.components.PlayerFaceRenderer.draw(g, skin, x, y, size);
+        //?} else {
+        /*net.minecraft.world.entity.player.PlayerSkin skin;
+        if (online) { skin = info.getSkin(); SKINS.put(uuid, skin); }
+        else { Object seen = SKINS.get(uuid); skin = seen != null ? (net.minecraft.world.entity.player.PlayerSkin) seen : net.minecraft.client.resources.DefaultPlayerSkin.get(uuid); }
+        var tex = skin.body().texturePath();
+        g.blit(net.minecraft.client.renderer.RenderPipelines.GUI_TEXTURED, tex, x, y, 8f, 8f, size, size, 8, 8, 64, 64, -1);
+        g.blit(net.minecraft.client.renderer.RenderPipelines.GUI_TEXTURED, tex, x, y, 40f, 8f, size, size, 8, 8, 64, 64, -1);
+        *///?}
+
+        outline(x - 1, y - 1, size + 2, size + 2, opaque(online ? 0x50C873 : 0x6E6E6E));
     }
 }

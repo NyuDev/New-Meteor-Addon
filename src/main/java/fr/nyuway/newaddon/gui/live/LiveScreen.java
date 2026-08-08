@@ -2,8 +2,11 @@ package fr.nyuway.newaddon.gui.live;
 
 import fr.nyuway.newaddon.modules.LiveMessage;
 import fr.nyuway.newaddon.modules.dm.LiveStore;
+import com.mojang.blaze3d.platform.InputConstants;
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
+import org.lwjgl.glfw.GLFW;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -50,6 +53,10 @@ public class LiveScreen extends Screen {
     protected void init() {
         windows.clear();
         windows.add(new LiveBuddyWindow(module, store, this::openChat, width, height));
+
+        // Every window open this session comes back with the screen; after a restart that set is
+        // just the pinned ones. Either way the user need not find each person again.
+        for (UUID peer : module.openPeers()) openChat(peer);
     }
 
     private void openChat(UUID peer) {
@@ -63,6 +70,7 @@ public class LiveScreen extends Screen {
         LiveChatWindow chat = new LiveChatWindow(module, store, peer, width, height);
         windows.add(chat);
         focus(chat);
+        module.markOpen(peer);
     }
 
     private void focus(LiveWindow window) {
@@ -130,34 +138,63 @@ public class LiveScreen extends Screen {
             LiveWindow window = windows.get(i);
             if (!window.inWindow(mouseX, mouseY)) continue;
 
-            if (window instanceof LiveChatWindow chat) chat.scroll(lines);
-            else if (window instanceof LiveBuddyWindow list) list.scroll(-lines);
+            if (window instanceof LiveChatWindow chat) {
+                if (chat.inInputArea(mouseX, mouseY)) chat.scrollInput(lines);
+                else chat.scroll(lines);
+            } else if (window instanceof LiveBuddyWindow list) {
+                list.scroll(-lines);
+            }
             return true;
         }
         return false;
     }
 
     private boolean typed(char c) {
-        if (top() instanceof LiveChatWindow chat) {
+        LiveWindow t = top();
+        if (t instanceof LiveChatWindow chat) {
             chat.type(c);
+            return true;
+        }
+        if (t instanceof LiveBuddyWindow list) {
+            list.type(c);
             return true;
         }
         return false;
     }
 
-    /** @param key GLFW code. Enter sends, backspace deletes; escape is left to close the screen. */
+    /**
+     * @param key GLFW code. Editing keys go to the reply box.
+     *
+     * <p>Control and shift are read from the keys themselves rather than the event's modifier
+     * field, which on the newer input API does not carry them reliably at the moment a letter is
+     * pressed - which is why Ctrl+A did nothing. The physical state is always right.
+     */
     private boolean pressed(int key) {
-        if (top() instanceof LiveChatWindow chat) {
-            if (key == 257 || key == 335) {
-                chat.send();
-                return true;
-            }
-            if (key == 259) {
-                chat.backspace();
-                return true;
-            }
+        boolean ctrl = keyDown(GLFW.GLFW_KEY_LEFT_CONTROL) || keyDown(GLFW.GLFW_KEY_RIGHT_CONTROL);
+        boolean shift = keyDown(GLFW.GLFW_KEY_LEFT_SHIFT) || keyDown(GLFW.GLFW_KEY_RIGHT_SHIFT);
+
+        LiveWindow t = top();
+        if (t instanceof LiveChatWindow chat) {
+            return chat.key(key, ctrl, shift);
+        }
+        if (t instanceof LiveBuddyWindow list && key == 259) {
+            list.backspace();
+            return true;
         }
         return false;
+    }
+
+    /**
+     * Whether a key is physically held. The {@code isKeyDown} overload took a window handle
+     * before 1.21.10 and the window itself after, so the call is the one split this needs.
+     */
+    private static boolean keyDown(int glfwKey) {
+        Minecraft m = Minecraft.getInstance();
+        //? if <1.21.10 {
+        /*return InputConstants.isKeyDown(m.getWindow().getWindow(), glfwKey);
+        *///?} else {
+        return InputConstants.isKeyDown(m.getWindow(), glfwKey);
+        //?}
     }
 
     // --- input, per era -----------------------------------------------------
