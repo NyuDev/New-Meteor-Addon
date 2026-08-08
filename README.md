@@ -178,12 +178,26 @@ its storage layout, keyed the way it keys it, in the place it puts it —
 conversation. Existing history opens straight away, and this can run alongside another
 Livemessage port without the two disagreeing.
 
-Its GUI could not come over: the original is Forge 1.12.2 and draws with `GuiScreen` and
-`Tessellator`, which do not exist on any version here. That layer is Meteor widgets instead.
-Replies go through the server's own `/msg`, so nobody else needs anything installed.
+The GUI is his, redrawn: the original is Forge 1.12.2 and draws with `GuiScreen` and
+`Tessellator`, which exist on no version here, so the same windows — 17-pixel titlebars, the
+same greys, the resize corner — go through one small canvas that hides the three places
+Minecraft moved the API out from under them. Replies go through the server's own `/msg`, so
+nobody else needs anything installed.
 
 Conversations are keyed by UUID, not name — a rename does not split a thread, and a recycled
 name does not merge two people.
+
+Each row is the person's head, ringed green while they are on the server and grey while they
+are not - offline players wear their default skin rather than vanishing - beside a name coloured
+by relationship: white for a stranger, Meteor's `friend-color` for a friend, `enemy-color` for an
+enemy, red for someone ignored. The buddy list folds into two sections, Recent and who else is on
+the server, ordered so the people you can reach sit at the top: online friends, online strangers,
+then the same two offline. A conversation carries a heart to friend them, a skull to make them an
+enemy, a speaker to mute and a barred circle to ignore, each lit while its toggle is on.
+
+A whisper that lands with the window closed slides an advancement-style toast in from the
+top-right, showing the sender and a preview of what they said; the sound and the toast are
+independent, so either can carry the alert alone.
 
 There is no flag on the wire saying "this is a whisper" — vanilla renders the line from a
 translation key and every server with its own format sends something else. So detection is by
@@ -196,7 +210,44 @@ build. Group 1 is the other person, group 2 is the text.
 | `send-command` | `/msg` | How a reply is sent. |
 | `hide-from-chat` | off | Keep matched whispers out of the chat feed. |
 | `announce` | on | Say in chat when a new conversation starts. |
+| `notify-sound` | on | Sound when a whisper lands with the window closed. |
+| `notify-toast` | on | Advancement-style toast, top-right, sender and preview, with the window closed. |
 | `incoming` / `outgoing` | vanilla + common | Detection patterns, on top of Livemessage's own `patterns/*.txt`. |
+
+## Friends and enemies
+
+Meteor ships a friend list and no opposite, so this adds one: `.enemy add <name>`, `remove`,
+`list`, `clear`, kept as plain names in `meteor-client/new-addon/enemies.txt`. Names rather than
+UUIDs, so someone who has never been in your tab list can still be marked.
+
+**The two are exclusive.** Making someone an enemy takes them off Meteor's friend list, and
+friending someone takes them off the enemy list — however it was done, including `.friend add`
+and Meteor's own Friends tab, which a watcher reconciles once a second. Nobody is both, so no
+part of the client has to guess which colour you meant.
+
+Its colour sits with Meteor's own, in **Config → Visual → `enemy-color`**, right under
+`friend-color`, and it is read fresh each frame: change the swatch and the names and the skull
+follow immediately.
+
+## FriendSync
+
+Keeps one friend list across the clients you switch between. There is no shared file and no
+event to hook, so it goes over the one channel every client already reads — chat. A change to
+Meteor's list fires a template with `{name}` filled in; a template starting with Meteor's own
+prefix is run locally instead of sent, so a client command never leaks to the server.
+
+The **sync** is the important half and runs on its own: telling the other client to re-read
+Meteor's whole list cannot drift the way a missed add can, so it goes out a few seconds after
+joining a world and again after every change. The add and remove commands still fire, for a
+client that only understands those.
+
+| Setting | Default | |
+| --- | --- | --- |
+| `on-add` | `;friend add {name}` | Sent when a friend is added. |
+| `on-remove` | `;friend remove {name}` | Sent when a friend is removed. |
+| `on-sync` | `;friend sync meteor` | Makes the other client re-read the whole list. |
+| `sync-on-join` | on | Send it a few seconds after joining a world. |
+| `log` | off | Say in chat what was sent. |
 
 ## ElytraResupply
 
