@@ -267,6 +267,8 @@ the slot it came from → break the ender chest with Silk Touch → pick it up.
 | `min-fireworks` / `target-fireworks` | 8 / 192 | Resupply below the first, carry away the second. |
 | `min-elytra-durability` | 80 | Mend once remaining durability drops below this. |
 | `xp-bottles` | 128 | Bottles to take out per mending session; leftovers go back. |
+| `settle-ticks` | 20 | Ticks of standing genuinely still before anything is placed. Touching the ground is not the same as having stopped. |
+| `make-room` | on | Drop one junk stack at your feet when the pack is full, so a broken shulker has somewhere to go. |
 | `require-silk-touch` | on | Refuse to place the chest without one, or it breaks to obsidian. |
 | `void-clearance` | 2 | Solid blocks required under the spot before placing anything. |
 | `search-radius` | 4 | How far around you to look for somewhere to set up. |

@@ -64,6 +64,8 @@ public class ElytraResupply extends Module {
         IDLE,
         /** Coming down before anything can be placed. Only a manual trigger starts here. */
         LAND,
+        /** On the ground but still sliding. Nothing is placed until the sliding stops. */
+        SETTLE,
         PLACE_CHEST, OPEN_CHEST, TAKE_SHULKER, PLACE_SHULKER, OPEN_SHULKER, TAKE_SUPPLIES,
         REPAIR, SWAP_ELYTRA,
         RETURN_SUPPLIES, BREAK_SHULKER, RETURN_SHULKER, BREAK_CHEST,
@@ -121,6 +123,26 @@ public class ElytraResupply extends Module {
     /** Ticks allowed to glide down after a mid-flight trigger before giving up. */
     private static final int LANDING_TIMEOUT = 20 * 60;
 
+    /**
+     * Blocks per tick under which the player counts as standing still.
+     *
+     * <p>0.01 is a fifth of a block a second - slower than walking by a wide margin, and well
+     * under the drift a landing slide still has left when {@code onGround} first turns true.
+     */
+    private static final double STILL_SPEED = 0.01;
+
+    /**
+     * Ticks the settle wait may take before going ahead regardless.
+     *
+     * <p>Standing on ice, in water, or being nudged by a mob can keep the speed above the
+     * threshold indefinitely. Waiting for ever there is worse than placing a chest a little
+     * early, so the wait has an end.
+     */
+    private static final int SETTLE_GIVEUP = 20 * 8;
+
+    /** Ticks spent failing to free a hotbar slot before opening with whatever is in hand. */
+    private static final int EMPTY_HAND_GIVEUP = 40;
+
     /** How far off the setup block counts as having been pushed rather than having stepped. */
     private static final double PUSH_TOLERANCE = 1.6;
 
@@ -173,6 +195,12 @@ public class ElytraResupply extends Module {
 
     /** Block the routine set up on, so being shoved off it can be undone. */
     private BlockPos anchor;
+    /** Where we were last tick, and how far that was, for the stillness test. */
+    private double lastX, lastZ, stepSq;
+    /** Consecutive ticks of standing still, counted by the settle phase. */
+    private int stillTicks;
+    /** Said once per run: the pack is full and there is no junk in it to throw away. */
+    private boolean warnedNoRoom;
     /** Total XP when the last bottle was thrown, and the tick to read it back on. */
     private int xpSnapshot = -1;
     private int xpCheckAt = -1;
@@ -283,6 +311,8 @@ public class ElytraResupply extends Module {
         voidScanCooldown = 0;
         landTicks = 0;
         groundTicks = 0;
+        stillTicks = 0;
+        warnedNoRoom = false;
 
         if (walkingToDrop) {
             BaritoneBridge.cancel();
@@ -310,6 +340,15 @@ public class ElytraResupply extends Module {
     @EventHandler
     private void onTick(TickEvent.Pre event) {
         if (mc.player == null || mc.level == null || !BaritoneBridge.isUsable()) return;
+
+        // How far we moved since last tick, taken before anything can return early so it is
+        // always exactly one tick's worth. Measured from the position rather than the velocity
+        // field, which the server can slide you without ever touching.
+        double stepX = mc.player.getX() - lastX;
+        double stepZ = mc.player.getZ() - lastZ;
+        stepSq = stepX * stepX + stepZ * stepZ;
+        lastX = mc.player.getX();
+        lastZ = mc.player.getZ();
 
         // A destination belongs to the world it was captured in. Being pulled out of the End
         // by a stasis chamber leaves a goal that is now tens of millions of blocks away and
@@ -377,6 +416,7 @@ public class ElytraResupply extends Module {
 
         switch (phase) {
             case LAND -> land();
+            case SETTLE -> settle();
             case PLACE_CHEST -> placeChest();
             case OPEN_CHEST -> openBlock(chestPos, Phase.TAKE_SHULKER);
             case TAKE_SHULKER -> takeShulker();
@@ -637,25 +677,17 @@ public class ElytraResupply extends Module {
             return;
         }
 
-        anchor = mc.player.blockPosition();
         if (cfg.debug.get()) {
-            log("run starting at %s (manual=%s fireworks=%s mending=%s)",
-                anchor, manual, needFireworks, needMending);
+            log("run starting on the ground (manual=%s fireworks=%s mending=%s)",
+                manual, needFireworks, needMending);
         }
 
-        // Mend with what is already on us before opening anything.
-        if (cfg.useCarriedFirst.get() && needMending
-            && PlayerInv.count(mc, Items.EXPERIENCE_BOTTLE) > 0) {
-            localPass = true;
-            info("Resupplying.");
-            to(Phase.REPAIR);
-            return;
-        }
-
-        if (!openStorageAllowed()) return;
-
+        // Already down, but not necessarily still: the key can be pressed mid-stride, and
+        // Baritone may be walking. The settle phase decides what to do next, so both the
+        // landing and this route make that decision in exactly one place.
         info("Resupplying.");
-        to(Phase.PLACE_CHEST);
+        stillTicks = 0;
+        to(Phase.SETTLE);
     }
 
     /**
@@ -750,13 +782,51 @@ public class ElytraResupply extends Module {
         }
 
         landTicks = 0;
-        anchor = mc.player.blockPosition();
 
         // Down safely, so stop the process now rather than leaving it pathing to a goal we
         // are already standing on while the routine places blocks around it. Safe to do here
         // and nowhere earlier: the real destination is already saved.
         BaritoneBridge.cancel();
-        if (cfg.debug.get()) log("landed, setting up");
+        if (cfg.debug.get()) log("touched down, waiting for the slide to stop");
+
+        // The anchor is not taken here. Touching the ground after an elytra landing is the
+        // start of a slide, not the end of the flight, and a spot remembered mid-slide is one
+        // the next tick has already left - which is what filled the log with "pushed off the
+        // setup spot" while nothing was pushing at all.
+        stillTicks = 0;
+        to(Phase.SETTLE);
+    }
+
+    /**
+     * Waits until the player has actually stopped moving before the run touches anything.
+     *
+     * <p>{@code onGround} turns true the moment the feet touch, with all of the flight's
+     * horizontal speed still on them; Baritone says as much itself, waiting for the velocity to
+     * die down. The routine did not wait, so it anchored to a block it was skidding out of,
+     * placed the chest a block or two behind where it ended up, and then spent the rest of the
+     * run walking back to a spot it had never really been on.
+     *
+     * <p>Stillness is measured from where the player actually is, tick to tick, rather than from
+     * the velocity field: the server can slide you without touching it, and after a landing the
+     * two disagree exactly when it matters. A run of {@code settle-ticks} still ticks is what
+     * counts - a single one can happen at the top of a bounce.
+     */
+    private void settle() {
+        boolean still = mc.player.onGround()
+            && !mc.player.isFallFlying()
+            && stepSq < STILL_SPEED * STILL_SPEED;
+
+        stillTicks = still ? stillTicks + 1 : 0;
+
+        boolean settled = stillTicks >= cfg.settleTicks.get();
+        if (!settled && phaseTicks < SETTLE_GIVEUP) return;
+
+        if (!settled) {
+            warning("Still drifting after %d seconds; setting up anyway.", SETTLE_GIVEUP / 20);
+        }
+
+        anchor = mc.player.blockPosition();
+        if (cfg.debug.get()) log("settled at %s, setting up", anchor);
 
         if (cfg.useCarriedFirst.get() && needMending
             && PlayerInv.count(mc, Items.EXPERIENCE_BOTTLE) > 0) {
@@ -765,8 +835,10 @@ public class ElytraResupply extends Module {
             return;
         }
 
+        // openStorageAllowed may have decided to log out instead; only clean up when it has not
+        // already moved us somewhere, or the abort would undo that decision.
         if (!openStorageAllowed()) {
-            abort();
+            if (phase == Phase.SETTLE) abort();
             return;
         }
         to(Phase.PLACE_CHEST);
@@ -870,10 +942,29 @@ public class ElytraResupply extends Module {
         }
 
         // Nothing spare: clear a slot, then come back for it on a later tick.
-        if (!PlayerInv.freeHotbarSlot(mc, loans) && cfg.debug.get()) {
-            log("could not free a hotbar slot to open empty handed");
+        if (PlayerInv.freeHotbarSlot(mc, loans)) return false;
+
+        // Freeing failed, and it will keep failing: it needs an empty slot in the inventory to
+        // push something down into, and there is none. Waiting here was a deadlock - the phase
+        // simply timed out having never once clicked the chest.
+        //
+        // So hold something harmless instead and open with it. An empty hand is a courtesy to
+        // whatever is watching, not a requirement of the game; a right-click on a container
+        // opens it whatever is in hand, and a tool cannot be placed by a click that misses.
+        if (phaseTicks < EMPTY_HAND_GIVEUP) {
+            if (cfg.debug.get() && phaseTicks % 20 == 1) {
+                log("inventory full, cannot free a hotbar slot to open empty handed");
+            }
+            return false;
         }
-        return false;
+
+        int safe = PlayerInv.safestHotbarSlotToHold(mc);
+        if (safe != -1) InvUtils.swap(safe, false);
+        if (cfg.debug.get()) {
+            log("opening with %s in hand; the inventory is too full to empty it",
+                mc.player.getMainHandItem().getItem());
+        }
+        return true;
     }
 
     private void takeShulker() {
@@ -1051,8 +1142,15 @@ public class ElytraResupply extends Module {
                 xpCheckAt = -1;
                 return;
             }
-            if (!equippedIsElytra) warning("No elytra equipped; nothing to repair.");
-            else if (!equippedMends) warning("Equipped elytra lacks Mending; cannot repair with XP.");
+            // Says what is actually in the slot. "No elytra equipped" on its own reads as a bug
+            // in the check, and cost a round of guessing at exactly that; a chestplate, or an
+            // empty slot mid-swap, are different problems with the same first sentence.
+            if (!equippedIsElytra) {
+                warning("Nothing to repair: the chest slot holds %s, not an elytra.",
+                    equipped.isEmpty() ? "nothing" : equipped.getItem());
+            } else if (!equippedMends) {
+                warning("Equipped elytra lacks Mending; cannot repair with XP.");
+            }
             afterRepair();
             return;
         }
@@ -1229,6 +1327,48 @@ public class ElytraResupply extends Module {
     }
 
     /** Mines a block we placed and waits until the drop is actually back in the inventory. */
+    /**
+     * Makes sure there is somewhere for the next thing picked up to go.
+     *
+     * <p>A full inventory does not fail loudly - the item simply stays on the ground, and every
+     * check afterwards reads as "not collected yet". So one junk stack is thrown away first, at
+     * our own feet: looking straight down means it lands on the block we are standing on rather
+     * than sailing off whatever ledge the End put us on, and it is picked back up by itself the
+     * moment a slot frees, which the shulker going back into the ender chest does.
+     *
+     * <p>Only ever junk, and only when {@code make-room} is on. With nothing droppable it says
+     * so once and lets the run continue: carrying on and maybe losing a shulker is bad, but
+     * throwing away something that mattered is worse.
+     *
+     * @return true when there is room, or when there is nothing more to be done about it
+     */
+    private boolean makeRoom() {
+        if (PlayerInv.firstEmptyInventorySlot(mc) != -1) return true;
+        if (!cfg.makeRoom.get()) return true;
+
+        int junk = PlayerInv.findJunkSlot(mc);
+        if (junk == -1) {
+            if (!warnedNoRoom) {
+                warnedNoRoom = true;
+                problem("Inventory full and nothing junk to drop; a pickup may be left behind.");
+            }
+            return true;
+        }
+
+        // Straight down, so it lands underfoot. Dropped at the angle we happened to be looking
+        // it can go over an edge, and on an End island that is the void.
+        Rotations.rotate(mc.player.getYRot(), 90.0f, PARK_PRIORITY + 1, !cfg.silentRotations.get(),
+            () -> InvUtils.drop().slot(junk));
+
+        if (cfg.debug.get()) {
+            log("inventory full; dropped %s from slot %d to make room",
+                mc.player.getInventory().getItem(junk).getItem(), junk);
+        }
+
+        // Next tick: the drop is a click that has to reach the server before the slot is free.
+        return false;
+    }
+
     private void breakAndCollect(BlockPos pos, Predicate<ItemStack> expected, boolean needsSilk, Phase next) {
         if (pos == null) {
             to(next);
@@ -1273,6 +1413,12 @@ public class ElytraResupply extends Module {
             }
             return;
         }
+
+        // Room to put it before it is on the ground. An item cannot be picked up into a full
+        // pack, so breaking a shulker with no free slot leaves it lying there with everything
+        // in it - which is what "drop not collected" was, every time, while the walk to fetch
+        // it could never have helped.
+        if (!makeRoom()) return;
 
         if (needsSilk) {
             int silk = silkTouchInHotbar();

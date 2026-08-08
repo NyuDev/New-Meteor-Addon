@@ -25,6 +25,8 @@ public final class ResupplySettings {
 
     public final Setting<Integer> actionDelay;
     public final Setting<Integer> containerSettle;
+    public final Setting<Integer> settleTicks;
+    public final Setting<Boolean> makeRoom;
     public final Setting<Boolean> autoTakeoff;
     public final Setting<Boolean> requireSilkTouch;
     public final Setting<Integer> voidClearance;
@@ -90,6 +92,24 @@ public final class ResupplySettings {
                          "in a packet after the menu itself, so reading straight away sees an " +
                          "empty chest.")
             .defaultValue(10).min(0).max(60).sliderMin(2).sliderMax(30)
+            .build());
+
+        settleTicks = sgGeneral.add(new IntSetting.Builder()
+            .name("settle-ticks")
+            .description("Ticks of standing genuinely still before anything is placed. Touching " +
+                         "the ground is not the same as having stopped: an elytra landing slides " +
+                         "for a while afterwards, and a chest placed during that slide is left " +
+                         "behind. Twenty ticks is a second.")
+            .defaultValue(20).min(0).max(200).sliderMin(0).sliderMax(60)
+            .build());
+
+        makeRoom = sgGeneral.add(new BoolSetting.Builder()
+            .name("make-room")
+            .description("Throw away one stack of junk when the pack is full, so a broken " +
+                         "shulker has somewhere to go. Dropped straight down, at your feet, and " +
+                         "picked back up once a slot frees. Only cobblestone, dirt and the like " +
+                         "are ever dropped; with none of that on you, nothing is.")
+            .defaultValue(true)
             .build());
 
         autoTakeoff = sgGeneral.add(new BoolSetting.Builder()

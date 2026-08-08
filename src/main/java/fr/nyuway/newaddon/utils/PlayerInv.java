@@ -4,6 +4,7 @@ import meteordevelopment.meteorclient.utils.player.FindItemResult;
 import meteordevelopment.meteorclient.utils.player.InvUtils;
 import net.minecraft.client.Minecraft;
 import net.minecraft.world.entity.EquipmentSlot;
+import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
@@ -155,6 +156,81 @@ public final class PlayerInv {
             }
         }
         return false;
+    }
+
+    /**
+     * Junk worth throwing away to make room, and nothing else.
+     *
+     * <p>An allow-list rather than a list of things to keep, on purpose. Deciding what is
+     * worthless by rule - unenchanted, stackable, cheap - gets it wrong the one time it matters
+     * and throws away a stack of obsidian on an anarchy server. Everything here is something you
+     * pick up by accident and would not walk back for. If none of it is on you, nothing is
+     * dropped and the routine says so instead.
+     */
+    private static final java.util.Set<Item> JUNK = java.util.Set.of(
+        Items.COBBLESTONE, Items.DIRT, Items.NETHERRACK, Items.GRAVEL, Items.SAND,
+        Items.ANDESITE, Items.DIORITE, Items.GRANITE, Items.COBBLED_DEEPSLATE, Items.DEEPSLATE,
+        Items.STONE, Items.END_STONE, Items.ROTTEN_FLESH, Items.STRING, Items.STICK,
+        Items.FLINT, Items.BONE, Items.SEAGRASS, Items.KELP
+    );
+
+    /** First inventory index holding nothing, hotbar included, or -1 when the pack is full. */
+    public static int firstEmptyInventorySlot(Minecraft mc) {
+        var inv = mc.player.getInventory();
+        for (int i = 0; i < MAIN_SIZE; i++) {
+            if (inv.getItem(i).isEmpty()) return i;
+        }
+        return -1;
+    }
+
+    /**
+     * The smallest stack of junk on the player, or -1.
+     *
+     * <p>Smallest so that as little as possible is on the ground: the point is one free slot,
+     * not a tidy inventory, and whatever is dropped has to survive being walked away from.
+     */
+    public static int findJunkSlot(Minecraft mc) {
+        var inv = mc.player.getInventory();
+        int best = -1;
+        int bestCount = Integer.MAX_VALUE;
+
+        for (int i = 0; i < MAIN_SIZE; i++) {
+            ItemStack stack = inv.getItem(i);
+            if (stack.isEmpty() || !JUNK.contains(stack.getItem())) continue;
+            if (stack.isEnchanted() || stack.isDamaged()) continue;
+            if (stack.getCount() < bestCount) {
+                bestCount = stack.getCount();
+                best = i;
+            }
+        }
+        return best;
+    }
+
+    /**
+     * The hotbar slot least likely to do something unwanted while a container is right-clicked,
+     * or -1 when the hotbar is empty.
+     *
+     * <p>Only needed when the hand cannot be emptied at all. Vanilla opens a container whatever
+     * is held - the block's use wins over the item's - so the only real hazard is a click that
+     * misses the container and lands on the ground with a block in hand. A damageable tool is
+     * therefore the best thing to be holding: it cannot be placed and does nothing to a chest.
+     * Anything that is not a block comes next, and a block only if there is nothing else.
+     */
+    public static int safestHotbarSlotToHold(Minecraft mc) {
+        var inv = mc.player.getInventory();
+        int nonBlock = -1;
+        int any = -1;
+
+        for (int i = 0; i < HOTBAR_SIZE; i++) {
+            ItemStack stack = inv.getItem(i);
+            if (stack.isEmpty()) return i;
+            if (any == -1) any = i;
+
+            if (stack.isDamageableItem() && !stack.is(Items.ELYTRA)) return i;
+            if (nonBlock == -1 && !(stack.getItem() instanceof BlockItem)) nonBlock = i;
+        }
+
+        return nonBlock != -1 ? nonBlock : any;
     }
 
     /**
