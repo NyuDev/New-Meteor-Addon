@@ -1,7 +1,9 @@
 package fr.nyuway.newaddon.gui.live;
 
+import fr.nyuway.newaddon.modules.LiveMessage;
 import fr.nyuway.newaddon.modules.dm.LiveStore;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import java.util.function.Consumer;
@@ -20,19 +22,24 @@ public class LiveBuddyWindow extends LiveWindow {
     private static final int ROW = 14;
     private static final int PAD = 4;
 
+    private final LiveMessage module;
     private final LiveStore store;
     private final Consumer<UUID> onOpen;
-    private final java.util.function.Predicate<UUID> onlineCheck;
+
+    /** What the list shows, rebuilt each frame: section headers and the rows under them. */
+    private final List<Row> rows = new ArrayList<>();
+
+    /** One line. A header is a caption; a row with a peer is clickable. */
+    private record Row(String header, UUID peer) { }
 
     private int scroll;
 
-    public LiveBuddyWindow(LiveStore store, Consumer<UUID> onOpen,
-                           java.util.function.Predicate<UUID> onlineCheck,
+    public LiveBuddyWindow(LiveMessage module, LiveStore store, Consumer<UUID> onOpen,
                            int screenWidth, int screenHeight) {
         super(screenWidth, screenHeight, LiveColors.rgb(120, 120, 200));
+        this.module = module;
         this.store = store;
         this.onOpen = onOpen;
-        this.onlineCheck = onlineCheck;
 
         this.title = "Messages";
         this.closeButton = false;
@@ -54,16 +61,45 @@ public class LiveBuddyWindow extends LiveWindow {
         scroll = Math.max(0, scroll + lines);
     }
 
+    /**
+     * Recent conversations first, then everyone else on the server.
+     *
+     * <p>The two answer different questions - who was I talking to, and who could I talk
+     * to - so they are separate sections rather than one merged list. Anyone already in a
+     * conversation is left out of the server section so they appear once, not twice.
+     */
+    private void buildRows() {
+        rows.clear();
+
+        List<UUID> peers = store.peers();
+        if (!peers.isEmpty()) {
+            rows.add(new Row("Recent", null));
+            for (UUID peer : peers) rows.add(new Row(null, peer));
+        }
+
+        List<UUID> others = module.onlinePlayers();
+        others.removeAll(peers);
+        if (!others.isEmpty()) {
+            rows.add(new Row("On the server", null));
+            for (UUID peer : others) rows.add(new Row(null, peer));
+        }
+    }
+
+    private int visibleRows() {
+        return (h - TITLEBAR - PAD * 2) / ROW;
+    }
+
     @Override
     public boolean mouseClicked(int mouseX, int mouseY, int button) {
         boolean close = super.mouseClicked(mouseX, mouseY, button);
 
-        List<UUID> peers = store.peers();
-        int rows = (h - TITLEBAR - PAD * 2) / ROW;
+        int shown = visibleRows();
+        for (int i = 0; i < shown && i + scroll < rows.size(); i++) {
+            Row row = rows.get(i + scroll);
+            if (row.peer() == null) continue;
 
-        for (int i = 0; i < rows && i + scroll < peers.size(); i++) {
             if (inRect(PAD, TITLEBAR + PAD + i * ROW, w - PAD * 2, ROW, mouseX, mouseY)) {
-                onOpen.accept(peers.get(i + scroll));
+                onOpen.accept(row.peer());
                 return false;
             }
         }
@@ -76,41 +112,47 @@ public class LiveBuddyWindow extends LiveWindow {
         super.draw(c);
 
         float alpha = openProgress();
-        List<UUID> peers = store.peers();
+        buildRows();
 
-        if (peers.isEmpty()) {
-            c.text("No conversations yet.", x + PAD + 2, y + TITLEBAR + PAD + 2,
+        if (rows.isEmpty()) {
+            c.text("Nobody yet.", x + PAD + 2, y + TITLEBAR + PAD + 2,
                 LiveCanvas.withAlpha(LiveColors.rgb(96, 96, 96), alpha));
             return;
         }
 
-        int rows = (h - TITLEBAR - PAD * 2) / ROW;
-        c.clip(x + PAD, y + TITLEBAR + PAD, w - PAD * 2, rows * ROW);
+        int shown = visibleRows();
+        c.clip(x + PAD, y + TITLEBAR + PAD, w - PAD * 2, shown * ROW);
 
-        for (int i = 0; i < rows && i + scroll < peers.size(); i++) {
-            UUID peer = peers.get(i + scroll);
+        for (int i = 0; i < shown && i + scroll < rows.size(); i++) {
+            Row row = rows.get(i + scroll);
             int rowY = y + TITLEBAR + PAD + i * ROW;
 
-            boolean hovered = inRect(PAD, TITLEBAR + PAD + i * ROW, w - PAD * 2, ROW,
-                lastMouseX, lastMouseY);
-            if (hovered) {
+            if (row.peer() == null) {
+                c.text(row.header(), x + PAD + 2, rowY + 3,
+                    LiveCanvas.withAlpha(LiveColors.rgb(150, 150, 150), alpha));
+                continue;
+            }
+
+            UUID peer = row.peer();
+
+            if (inRect(PAD, TITLEBAR + PAD + i * ROW, w - PAD * 2, ROW, lastMouseX, lastMouseY)) {
                 c.box(x + PAD, rowY, w - PAD * 2, ROW,
                     LiveCanvas.withAlpha(LiveColors.rgb(64, 64, 64), alpha));
             }
 
-            boolean online = onlineCheck.test(peer);
+            boolean online = module.isOnline(peer);
             c.box(x + PAD + 2, rowY + 4, 5, 5, LiveCanvas.withAlpha(
                 online ? LiveColors.rgb(60, 148, 100) : LiveColors.rgb(80, 80, 80), alpha));
 
-            // Colour means "here now". Everyone offline greys out, so the list answers the
-            // question it is actually opened to answer - who can I reach - at a glance,
-            // rather than being a wall of colour where every name competes equally.
-            int nameColor = online
-                ? LiveColors.windowColor(store, peer)
-                : LiveColors.rgb(110, 110, 110);
+            // Colour means here now. Everyone offline greys out, so the list answers the
+            // question it is opened to answer - who can I reach - at a glance, rather than
+            // being a wall of colour where every name competes equally.
+            int nameColor = online ? module.colorOf(peer) : LiveColors.rgb(110, 110, 110);
 
-            c.text(store.nameOf(peer), x + PAD + 11, rowY + 3,
-                LiveCanvas.withAlpha(nameColor, alpha));
+            String label = module.displayName(peer);
+            if (module.isIgnored(peer)) label = "- " + label;
+
+            c.text(label, x + PAD + 11, rowY + 3, LiveCanvas.withAlpha(nameColor, alpha));
         }
 
         c.unclip();

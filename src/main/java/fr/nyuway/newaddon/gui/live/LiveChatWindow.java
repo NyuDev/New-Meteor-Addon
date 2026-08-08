@@ -43,7 +43,7 @@ public class LiveChatWindow extends LiveWindow {
 
     public LiveChatWindow(LiveMessage module, LiveStore store, UUID peer,
                           int screenWidth, int screenHeight) {
-        super(screenWidth, screenHeight, LiveColors.windowColor(store, peer));
+        super(screenWidth, screenHeight, module.colorOf(peer));
         this.module = module;
         this.store = store;
         this.peer = peer;
@@ -51,6 +51,13 @@ public class LiveChatWindow extends LiveWindow {
         this.w = 420;
         this.h = 260;
         restorePlace("chat:" + peer, screenWidth, screenHeight);
+
+        // Upstream puts these as three icons down the right edge of the header. Same place,
+        // same order - friend, ignore - drawn as short labels since icons.png is not loaded.
+        buttons.add(new LiveButton(46, TITLEBAR + 4, 42, 11, true, "friend",
+            "Toggle friend", () -> module.toggleFriend(peer)));
+        buttons.add(new LiveButton(46, TITLEBAR + 18, 42, 11, true, "ignore",
+            "Toggle ignore", () -> module.toggleIgnore(peer)));
     }
 
     @Override
@@ -91,6 +98,10 @@ public class LiveChatWindow extends LiveWindow {
         boolean online = module.isOnline(peer);
         title = "[DM] " + name();
 
+        // Re-read every frame: friending someone should recolour the window at once rather
+        // than on the next open.
+        primaryColor = module.colorOf(peer);
+
         super.draw(c);
 
         float alpha = openProgress();
@@ -101,7 +112,10 @@ public class LiveChatWindow extends LiveWindow {
         c.box(x + 3, y + TITLEBAR + 3, 36, 36,
             LiveCanvas.withAlpha(online ? LiveColors.rgb(60, 148, 100) : INACTIVE, alpha));
 
-        c.text(name(), x + 42, y + TITLEBAR + 5, LiveCanvas.withAlpha(0xFFFFFF, alpha));
+        String label = name();
+        if (module.isFriend(peer)) label += " (friend)";
+        if (module.isIgnored(peer)) label += " (ignored)";
+        c.text(label, x + 42, y + TITLEBAR + 5, LiveCanvas.withAlpha(0xFFFFFF, alpha));
         c.text(peer.toString(), x + 42, y + TITLEBAR + 16, LiveCanvas.withAlpha(INACTIVE, alpha));
         c.text(online ? "online" : "offline", x + 42, y + TITLEBAR + 26,
             LiveCanvas.withAlpha(INACTIVE, alpha));

@@ -19,6 +19,15 @@ public final class Profiles {
     private Profiles() {
     }
 
+    /** Their name, same story as the id: {@code getName()} became {@code name()}. */
+    public static String nameOf(GameProfile profile) {
+        //? if >=1.21.10 {
+        return profile.name();
+        //?} else {
+        /*return profile.getName();
+        *///?}
+    }
+
     public static UUID idOf(GameProfile profile) {
         //? if >=1.21.10 {
         return profile.id();

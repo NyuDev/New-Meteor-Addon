@@ -8,6 +8,7 @@ import fr.nyuway.newaddon.utils.Profiles;
 import meteordevelopment.meteorclient.events.game.ReceiveMessageEvent;
 import meteordevelopment.meteorclient.events.world.TickEvent;
 import meteordevelopment.meteorclient.settings.BoolSetting;
+import meteordevelopment.meteorclient.settings.EnumSetting;
 import meteordevelopment.meteorclient.settings.IntSetting;
 import meteordevelopment.meteorclient.settings.KeybindSetting;
 import meteordevelopment.meteorclient.settings.Setting;
@@ -40,6 +41,15 @@ import java.util.List;
  * module is on.
  */
 public class LiveMessage extends Module {
+
+    /** Where an ignore takes effect. */
+    public enum IgnoreMode {
+        /** Hidden in this window only. Nobody else can tell. */
+        Client,
+        /** Run the server's own ignore command, so the message never arrives. */
+        Server
+    }
+
 
     private final SettingGroup sgGeneral = settings.getDefaultGroup();
     private final SettingGroup sgPatterns = settings.createGroup("Patterns");
@@ -75,6 +85,48 @@ public class LiveMessage extends Module {
         .name("history-limit")
         .description("Messages kept per conversation in memory. The file on disk keeps them all.")
         .defaultValue(500).min(20).max(5000).sliderRange(50, 1000)
+        .build());
+
+    private final SettingGroup sgPeople = settings.createGroup("People");
+
+    private final Setting<Boolean> friendColor = sgPeople.add(new BoolSetting.Builder()
+        .name("friend-colour")
+        .description("Draw friends in Meteor's own friend colour instead of the colour " +
+                     "generated from their UUID, so the list agrees with the rest of the client.")
+        .defaultValue(true)
+        .build());
+
+    private final Setting<Boolean> greetOnFriend = sgPeople.add(new BoolSetting.Builder()
+        .name("greet-on-friend")
+        .description("Send a message when you add someone as a friend from this window.")
+        .defaultValue(false)
+        .build());
+
+    private final Setting<String> greeting = sgPeople.add(new StringSetting.Builder()
+        .name("greeting")
+        .description("What that message says.")
+        .defaultValue("Added you as a friend.")
+        .visible(greetOnFriend::get)
+        .build());
+
+    private final Setting<Boolean> notifySound = sgPeople.add(new BoolSetting.Builder()
+        .name("notify-sound")
+        .description("Play a sound when a message arrives while the window is closed.")
+        .defaultValue(true)
+        .build());
+
+    private final Setting<IgnoreMode> ignoreMode = sgPeople.add(new EnumSetting.Builder<IgnoreMode>()
+        .name("ignore-mode")
+        .description("Client hides them here only, and nobody else knows. Server runs the " +
+                     "ignore command, which also stops the messages arriving at all.")
+        .defaultValue(IgnoreMode.Client)
+        .build());
+
+    private final Setting<String> ignoreCommand = sgPeople.add(new StringSetting.Builder()
+        .name("ignore-command")
+        .description("Command used for a server-side ignore. The name is appended.")
+        .defaultValue("/ignore")
+        .visible(() -> ignoreMode.get() == IgnoreMode.Server)
         .build());
 
     private final Setting<List<String>> incoming = sgPatterns.add(new StringListSetting.Builder()
@@ -169,11 +221,19 @@ public class LiveMessage extends Module {
             return;
         }
 
+        // An ignored conversation is still recorded - ignoring someone is about not being
+        // interrupted by them, not about losing what they said.
+        boolean ignored = store.settingsOf(peer).isBlocked;
+
         boolean isNew = store.thread(peer).isEmpty();
         store.record(peer, hit.peer(), !isIncoming, hit.text(), selfId());
 
-        if (isIncoming && isNew && announce.get()) {
+        if (isIncoming && isNew && announce.get() && !ignored) {
             info("New conversation with %s.", hit.peer());
+        }
+
+        if (isIncoming && !ignored && notifySound.get() && mc.screen == null && mc.player != null) {
+            mc.player.playSound(net.minecraft.sounds.SoundEvents.EXPERIENCE_ORB_PICKUP, 1f, 1.6f);
         }
 
         // Always written to the game log, even when hidden from chat. Hiding a message from
@@ -182,7 +242,7 @@ public class LiveMessage extends Module {
         NewAddon.LOG.info("[messages] {} {}: {}",
             isIncoming ? "<-" : "->", hit.peer(), hit.text());
 
-        if (hideFromChat.get()) event.cancel();
+        if (hideFromChat.get() || ignored) event.cancel();
     }
 
     /**
@@ -206,6 +266,102 @@ public class LiveMessage extends Module {
 
     public LiveStore store() {
         return store;
+    }
+
+    /**
+     * The colour a conversation is drawn in.
+     *
+     * <p>Friends take Meteor's friend colour when that is on, so this window agrees with
+     * nametags and the rest of the client rather than inventing a second opinion about who
+     * matters. Everyone else keeps the colour generated from their UUID.
+     */
+    public int colorOf(java.util.UUID peer) {
+        if (friendColor.get() && isFriend(peer)) {
+            var c = meteordevelopment.meteorclient.systems.config.Config.get().friendColor.get();
+            return (c.r << 16) | (c.g << 8) | c.b;
+        }
+        return fr.nyuway.newaddon.gui.live.LiveColors.windowColor(store, peer);
+    }
+
+    public boolean isFriend(java.util.UUID peer) {
+        return meteordevelopment.meteorclient.systems.friends.Friends.get()
+            .get(store.nameOf(peer)) != null;
+    }
+
+    /** Adds or removes the friend, and greets them if that was asked for. */
+    public void toggleFriend(java.util.UUID peer) {
+        var friends = meteordevelopment.meteorclient.systems.friends.Friends.get();
+        String name = store.nameOf(peer);
+        var existing = friends.get(name);
+
+        if (existing != null) {
+            friends.remove(existing);
+            info("Removed %s from friends.", name);
+            return;
+        }
+
+        friends.add(new meteordevelopment.meteorclient.systems.friends.Friend(name, peer));
+        info("Added %s to friends.", name);
+
+        // Deliberately after the add, and only on the add: a greeting sent when someone is
+        // removed would be the opposite of what was meant.
+        if (greetOnFriend.get() && !greeting.get().isBlank()) send(name, greeting.get());
+    }
+
+    public boolean isIgnored(java.util.UUID peer) {
+        return store.settingsOf(peer).isBlocked;
+    }
+
+    /**
+     * Toggles ignoring someone.
+     *
+     * <p>Client mode only hides them here. Server mode also runs the server's own command, so
+     * the message never reaches you - but it is visible to the server, which is why it is not
+     * the default.
+     */
+    public void toggleIgnore(java.util.UUID peer) {
+        var settings = store.settingsOf(peer);
+        settings.isBlocked = !settings.isBlocked;
+        store.saveSettings(peer, settings);
+
+        String name = store.nameOf(peer);
+        info(settings.isBlocked ? "Ignoring %s." : "No longer ignoring %s.", name);
+
+        if (ignoreMode.get() == IgnoreMode.Server) {
+            String command = ignoreCommand.get().trim();
+            if (!command.startsWith("/")) command = "/" + command;
+            ChatUtils.sendPlayerMsg(command + " " + name);
+        }
+    }
+
+    /**
+     * What to print for someone.
+     *
+     * <p>The stored last-known name first, then the tab list. Without the second the new
+     * server section would be a column of UUID fragments: those players have no settings
+     * file yet precisely because they have never been spoken to.
+     */
+    public String displayName(java.util.UUID peer) {
+        var settings = store.settingsOf(peer);
+        if (settings.lastName != null && !settings.lastName.isBlank()) return settings.lastName;
+
+        if (mc.getConnection() != null) {
+            var info = mc.getConnection().getPlayerInfo(peer);
+            if (info != null) return Profiles.nameOf(info.getProfile());
+        }
+        return peer.toString().substring(0, 8);
+    }
+
+    /** Everyone on the server right now, so the list can offer people never spoken to. */
+    public java.util.List<java.util.UUID> onlinePlayers() {
+        java.util.List<java.util.UUID> ids = new java.util.ArrayList<>();
+        if (mc.getConnection() == null) return ids;
+
+        for (var info : mc.getConnection().getOnlinePlayers()) {
+            java.util.UUID id = Profiles.idOf(info.getProfile());
+            if (mc.player == null || !id.equals(mc.player.getUUID())) ids.add(id);
+        }
+        return ids;
     }
 
     /** Whether that player is on the server right now, for the dot beside their name. */

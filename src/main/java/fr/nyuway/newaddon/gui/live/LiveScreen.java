@@ -49,7 +49,7 @@ public class LiveScreen extends Screen {
     @Override
     protected void init() {
         windows.clear();
-        windows.add(new LiveBuddyWindow(store, this::openChat, module::isOnline, width, height));
+        windows.add(new LiveBuddyWindow(module, store, this::openChat, width, height));
     }
 
     private void openChat(UUID peer) {
