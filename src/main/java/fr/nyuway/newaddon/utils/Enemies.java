@@ -7,6 +7,7 @@ import meteordevelopment.meteorclient.settings.SettingGroup;
 import meteordevelopment.meteorclient.systems.config.Config;
 import meteordevelopment.meteorclient.systems.friends.Friend;
 import meteordevelopment.meteorclient.systems.friends.Friends;
+import meteordevelopment.meteorclient.utils.render.color.RainbowColors;
 import meteordevelopment.meteorclient.utils.render.color.SettingColor;
 import net.fabricmc.loader.api.FabricLoader;
 
@@ -59,11 +60,13 @@ public final class Enemies {
      * Adds {@code enemy-color} to Meteor's config tab. Call once, from the addon's
      * {@code onInitialize}.
      *
-     * <p>Timing is the whole reason this is a method and not a field initialiser: Meteor runs
-     * {@code Systems.init()}, then every addon's {@code onInitialize()}, then {@code Systems.load()}.
-     * Registering in that window means the setting exists before the saved config is read, so it
-     * both shows up in the tab and remembers what it was set to. Registered later it would draw
-     * fine and forget its value on every restart.
+     * <p>Timing is the whole reason this is a method and not a field initialiser. Meteor loads
+     * the config twice: once inside {@code Systems.init()}, which happens before any addon
+     * exists, and again in {@code Systems.load()} after every addon's {@code onInitialize()} has
+     * run - and {@code System.load} re-reads the file each time rather than remembering it did.
+     * That second pass is what fills this setting in, so registering from {@code onInitialize} is
+     * both early enough to be remembered and the only place it can be done. Registered any later
+     * it would draw fine and forget its value on every restart.
      */
     public static void registerColorSetting() {
         if (colorSetting != null) return;
@@ -81,6 +84,11 @@ public final class Enemies {
             .description("The color used to show enemies.")
             .defaultValue(new SettingColor(255, 107, 61))
             .build());
+
+        // Meteor registers its own colour settings for rainbow in Systems.init(), which has
+        // already run by the time an addon exists - so this one has to say so itself, or ticking
+        // rainbow on it would be a switch that does nothing while the friend colour's works.
+        RainbowColors.addSetting(colorSetting);
     }
 
     /** The enemy colour, packed 0xRRGGBB the way the windows want it. */
