@@ -2,12 +2,12 @@ package fr.nyuway.newaddon.modules;
 
 import fr.nyuway.newaddon.NewAddon;
 import fr.nyuway.newaddon.gui.DmScreen;
+import meteordevelopment.meteorclient.gui.GuiThemes;
 import fr.nyuway.newaddon.modules.dm.DmPatterns;
 import fr.nyuway.newaddon.modules.dm.LiveStore;
 import fr.nyuway.newaddon.utils.Profiles;
 import meteordevelopment.meteorclient.events.game.ReceiveMessageEvent;
 import meteordevelopment.meteorclient.events.world.TickEvent;
-import meteordevelopment.meteorclient.gui.GuiThemes;
 import meteordevelopment.meteorclient.settings.BoolSetting;
 import meteordevelopment.meteorclient.settings.IntSetting;
 import meteordevelopment.meteorclient.settings.KeybindSetting;
@@ -201,6 +201,12 @@ public class LiveMessage extends Module {
 
     public LiveStore store() {
         return store;
+    }
+
+    /** Whether that player is on the server right now, for the dot beside their name. */
+    public boolean isOnline(java.util.UUID peer) {
+        if (mc.getConnection() == null) return false;
+        return mc.getConnection().getOnlinePlayerIds().contains(peer);
     }
 
     /** Sends a reply through the server's own command, and records it straight away. */
