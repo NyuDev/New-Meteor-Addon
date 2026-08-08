@@ -62,6 +62,16 @@ public final class LiveStore {
     private final Map<UUID, PeerSettings> peers = new HashMap<>();
     private final Map<UUID, List<Entry>> loaded = new HashMap<>();
 
+    /**
+     * When each conversation was last written, read once rather than asked of the disk.
+     *
+     * <p>Ordering used to call {@code Files.getLastModifiedTime} from inside the sort
+     * comparator, and the list is rebuilt every frame: fifty-four conversations is about
+     * three hundred comparisons, so six hundred filesystem calls per frame and better than
+     * thirty thousand a second. That is where the dragging stutter came from.
+     */
+    private final Map<UUID, Long> lastActivity = new HashMap<>();
+
     public LiveStore() {
         root = FabricLoader.getInstance().getGameDir()
             .resolve("meteor-client").resolve("livemessage");
@@ -81,6 +91,7 @@ public final class LiveStore {
     public void loadIndex() {
         peers.clear();
         loaded.clear();
+        lastActivity.clear();
 
         Path dir = root.resolve("settings");
         if (!Files.isDirectory(dir)) return;
@@ -102,7 +113,15 @@ public final class LiveStore {
         try (Stream<Path> files = Files.list(msgs)) {
             files.filter(p -> p.getFileName().toString().endsWith(".jsonl")).forEach(p -> {
                 UUID id = uuidOf(p, ".jsonl");
-                if (id != null) peers.computeIfAbsent(id, k -> new PeerSettings());
+                if (id == null) return;
+                peers.computeIfAbsent(id, k -> new PeerSettings());
+
+                // The one stat per file, taken here and never again.
+                try {
+                    lastActivity.put(id, Files.getLastModifiedTime(p).toMillis());
+                } catch (IOException ignored) {
+                    lastActivity.put(id, 0L);
+                }
             });
         } catch (IOException e) {
             NewAddon.LOG.warn("[livemessage] could not list {}: {}", msgs, e.toString());
@@ -112,7 +131,8 @@ public final class LiveStore {
     /** Peers, most recently written first, so the list reads like a chat client's. */
     public List<UUID> peers() {
         List<UUID> ids = new ArrayList<>(peers.keySet());
-        ids.sort((a, b) -> Long.compare(lastWrite(b), lastWrite(a)));
+        ids.sort((a, b) -> Long.compare(
+            lastActivity.getOrDefault(b, 0L), lastActivity.getOrDefault(a, 0L)));
         return ids;
     }
 
@@ -173,6 +193,7 @@ public final class LiveStore {
         entry.myUUID = self == null ? "" : self.toString();
 
         thread(peer).add(entry);
+        lastActivity.put(peer, entry.timestamp);
 
         try {
             Files.createDirectories(root.resolve("messages"));
@@ -213,15 +234,6 @@ public final class LiveStore {
 
     private Path messageFile(UUID id) {
         return root.resolve("messages").resolve(id + ".jsonl");
-    }
-
-    private long lastWrite(UUID id) {
-        try {
-            Path f = messageFile(id);
-            return Files.exists(f) ? Files.getLastModifiedTime(f).toMillis() : 0L;
-        } catch (IOException e) {
-            return 0L;
-        }
     }
 
     /** Filename to UUID, or null when the file is not one of ours. */
