@@ -100,8 +100,18 @@ public final class SpotFinder {
 
     private boolean isUsable(BlockPos pos, boolean forShulker) {
         if (pos.equals(occupiedA) || pos.equals(occupiedB)) return false;
-        if (pos.equals(mc.player.blockPosition())) return false;
-        if (pos.equals(mc.player.blockPosition().above())) return false;
+
+        // Anywhere the player is standing in, not merely the block their feet are counted in.
+        // A hitbox is six tenths of a block wide and hardly ever centred, so standing near an
+        // edge puts part of you in the next column along - and Minecraft will not place a block
+        // inside an entity. It refuses without saying anything, so the routine asked once a tick
+        // for ten seconds and then reported a timeout, never having been told no.
+        //
+        // This was checked only for shulkers, and only for the space above them. It went
+        // unnoticed while the run set up mid-slide: by the time the block was placed the player
+        // had drifted off it. Standing still, which is the whole point of settling first, is
+        // what turned it from a rarity into every time.
+        if (mc.player.getBoundingBox().intersects(new AABB(pos))) return false;
 
         if (!mc.level.getBlockState(pos).isAir()) return false;
         if (!mc.level.getBlockState(pos.above()).isAir()) return false;

@@ -147,6 +147,15 @@ public class ElytraResupply extends Module {
     private static final int INVENTORY_IDLE = 10;
 
     /**
+     * Ticks of asking for a placement before the spot is written off.
+     *
+     * <p>A refusal is silent - the block simply does not appear - so time is the only signal
+     * there is. Two and a half seconds is many round trips; anything that was going to work has
+     * by then.
+     */
+    private static final int PLACE_GIVEUP = 50;
+
+    /**
      * Attempts at one container move before it is written off.
      *
      * <p>A move that has not taken after this many tries at {@code action-delay} apart is not
@@ -233,6 +242,11 @@ public class ElytraResupply extends Module {
     private java.util.Set<Integer> foreignShulkers = new java.util.HashSet<>();
     /** Inventory index of the box this run borrowed, or -1 while it is not on us. */
     private int ourShulkerSlot = -1;
+
+    /** A spot the server would not let us place on, so the next search does not offer it again. */
+    private BlockPos rejectedSpot;
+    /** Ticks spent asking for the current placement, since a refusal never answers. */
+    private int placeTicks;
     /** Total XP when the last bottle was thrown, and the tick to read it back on. */
     private int xpSnapshot = -1;
     private int xpCheckAt = -1;
@@ -349,6 +363,8 @@ public class ElytraResupply extends Module {
         pushAttempts = 0;
         foreignShulkers.clear();
         ourShulkerSlot = -1;
+        rejectedSpot = null;
+        placeTicks = 0;
         PlayerInv.closeInventory(mc);
 
         if (walkingToDrop) {
@@ -444,10 +460,21 @@ public class ElytraResupply extends Module {
             }
             if (phase == Phase.WAIT_DISCONNECT || phase == Phase.LAND
                 || phase == Phase.VOID_LAND) {
-                // Both of these wait on the ground arriving, which takes as long as it takes.
+                // These wait on the ground arriving, which takes as long as it takes.
                 phaseTicks = PHASE_TIMEOUT;
                 if (phase == Phase.LAND) land();
                 else if (phase == Phase.VOID_LAND) voidLand();
+                return;
+            }
+
+            // Walking onto a drop has its own, much longer clock - thirty seconds of picking a
+            // way over broken End terrain. This timeout is ten, so it always got there first:
+            // the chase was cut off at the knees every time, the phase was torn down, and the
+            // shulker it was walking towards stayed on the ground. The generous limit had never
+            // once been reached.
+            if (walkingToDrop) {
+                phaseTicks = PHASE_TIMEOUT;
+                breakPhase();
                 return;
             }
             warning("Timed out; cleaning up.");
@@ -467,10 +494,8 @@ public class ElytraResupply extends Module {
             case TAKE_SUPPLIES -> takeSupplies();
             case REPAIR -> repair();
             case RETURN_SUPPLIES -> returnSupplies();
-            case BREAK_SHULKER -> breakAndCollect(shulkerPos, Containers::isShulker, false, Phase.RETURN_SHULKER);
+            case BREAK_SHULKER, BREAK_CHEST -> breakPhase();
             case RETURN_SHULKER -> returnShulker();
-            case BREAK_CHEST -> breakAndCollect(chestPos, s -> s.is(Items.ENDER_CHEST), true,
-                Phase.RESTORE_HOTBAR);
             case RESTORE_HOTBAR -> restoreHotbar();
             case REPOSITION -> reposition();
             case VOID_LAND -> voidLand();
@@ -914,7 +939,11 @@ public class ElytraResupply extends Module {
 
     private void placeChest() {
         if (chestPos == null) {
-            chestPos = new SpotFinder(mc, cfg.searchRadius.get(), cfg.voidClearance.get(), chestPos, shulkerPos).find(false);
+            // The spot refused last time is passed in as taken, so the search does not simply
+            // hand back the nearest one again - which is the one that just failed.
+            chestPos = new SpotFinder(mc, cfg.searchRadius.get(), cfg.voidClearance.get(),
+                rejectedSpot, shulkerPos).find(false);
+            placeTicks = 0;
             if (chestPos == null) {
                 error("Nowhere safe to set up here.");
                 abort();
@@ -923,6 +952,7 @@ public class ElytraResupply extends Module {
         }
 
         if (mc.level.getBlockState(chestPos).is(Blocks.ENDER_CHEST)) {
+            rejectedSpot = null;
             to(Phase.OPEN_CHEST);
             return;
         }
@@ -937,6 +967,24 @@ public class ElytraResupply extends Module {
             }
             return;
         }
+
+        // A refused placement says nothing - it just does not happen - so the block not being
+        // there after a couple of seconds of asking is the only answer available. Try somewhere
+        // else once, then say so, rather than asking two hundred times and reporting a timeout
+        // that names the phase and not the reason.
+        if (++placeTicks > PLACE_GIVEUP) {
+            if (rejectedSpot == null) {
+                if (cfg.debug.get()) log("nothing placed at %s; trying another spot", chestPos);
+                rejectedSpot = chestPos;
+                chestPos = null;
+                return;
+            }
+            error("Could not place the ender chest here; something is in the way.");
+            abort();
+            return;
+        }
+
+        if (!ready()) return;
 
         PlayerInv.closeInventory(mc);
 
@@ -1476,6 +1524,18 @@ public class ElytraResupply extends Module {
 
         // Next tick: the drop is a click that has to reach the server before the slot is free.
         return false;
+    }
+
+    /**
+     * The two breaking phases, in one place so the drop chase can be exempted from the phase
+     * timeout without the exemption having to know which of them it is.
+     */
+    private void breakPhase() {
+        if (phase == Phase.BREAK_SHULKER) {
+            breakAndCollect(shulkerPos, Containers::isShulker, false, Phase.RETURN_SHULKER);
+        } else {
+            breakAndCollect(chestPos, s -> s.is(Items.ENDER_CHEST), true, Phase.RESTORE_HOTBAR);
+        }
     }
 
     private void breakAndCollect(BlockPos pos, Predicate<ItemStack> expected, boolean needsSilk, Phase next) {
