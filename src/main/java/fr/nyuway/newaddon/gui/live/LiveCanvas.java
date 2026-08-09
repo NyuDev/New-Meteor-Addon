@@ -149,26 +149,63 @@ public final class LiveCanvas {
         var info = connection == null ? null : connection.getPlayerInfo(uuid);
         boolean online = info != null;
 
+        // Offline and never seen this session: their own skin, fetched from Mojang and kept.
+        // Falling back to the default skin here was drawing somebody else's head - Steve's - on
+        // a window whose whole point is which person it belongs to.
+        Object fetched = online ? null : fr.nyuway.newaddon.utils.Skins.texture(uuid);
+
         //? if <1.20.2 {
         /*net.minecraft.resources.ResourceLocation skin;
         if (online) { skin = info.getSkinLocation(); SKINS.put(uuid, skin); }
+        else if (fetched != null) { skin = (net.minecraft.resources.ResourceLocation) fetched; }
         else { Object seen = SKINS.get(uuid); skin = seen != null ? (net.minecraft.resources.ResourceLocation) seen : net.minecraft.client.resources.DefaultPlayerSkin.getDefaultSkin(uuid); }
-        net.minecraft.client.gui.components.PlayerFaceRenderer.draw(g, skin, x, y, size);
+        net.minecraft.client.gui.components.PlayerFaceRenderer.draw(g, skin, x, y, size, true, false);
+        *///?} else if <1.21.3 {
+        /*if (!online && fetched != null) {
+            net.minecraft.client.gui.components.PlayerFaceRenderer.draw(g, (net.minecraft.resources.ResourceLocation) fetched, x, y, size, true, false);
+        } else {
+            net.minecraft.client.resources.PlayerSkin skin;
+            if (online) { skin = info.getSkin(); SKINS.put(uuid, skin); }
+            else { Object seen = SKINS.get(uuid); skin = seen != null ? (net.minecraft.client.resources.PlayerSkin) seen : net.minecraft.client.resources.DefaultPlayerSkin.get(uuid); }
+            net.minecraft.client.gui.components.PlayerFaceRenderer.draw(g, skin, x, y, size);
+        }
         *///?} else if <1.21.10 {
-        /*net.minecraft.client.resources.PlayerSkin skin;
-        if (online) { skin = info.getSkin(); SKINS.put(uuid, skin); }
-        else { Object seen = SKINS.get(uuid); skin = seen != null ? (net.minecraft.client.resources.PlayerSkin) seen : net.minecraft.client.resources.DefaultPlayerSkin.get(uuid); }
-        net.minecraft.client.gui.components.PlayerFaceRenderer.draw(g, skin, x, y, size);
+        /*if (!online && fetched != null) {
+            net.minecraft.client.gui.components.PlayerFaceRenderer.draw(g, (net.minecraft.resources.ResourceLocation) fetched, x, y, size, true, false, -1);
+        } else {
+            net.minecraft.client.resources.PlayerSkin skin;
+            if (online) { skin = info.getSkin(); SKINS.put(uuid, skin); }
+            else { Object seen = SKINS.get(uuid); skin = seen != null ? (net.minecraft.client.resources.PlayerSkin) seen : net.minecraft.client.resources.DefaultPlayerSkin.get(uuid); }
+            net.minecraft.client.gui.components.PlayerFaceRenderer.draw(g, skin, x, y, size);
+        }
+        *///?} else if <1.21.11 {
+        /*if (!online && fetched != null) {
+            net.minecraft.client.gui.components.PlayerFaceRenderer.draw(g, (net.minecraft.resources.ResourceLocation) fetched, x, y, size, true, false, -1);
+        } else {
+            net.minecraft.world.entity.player.PlayerSkin skin;
+            if (online) { skin = info.getSkin(); SKINS.put(uuid, skin); }
+            else { Object seen = SKINS.get(uuid); skin = seen != null ? (net.minecraft.world.entity.player.PlayerSkin) seen : net.minecraft.client.resources.DefaultPlayerSkin.get(uuid); }
+            net.minecraft.client.gui.components.PlayerFaceRenderer.draw(g, skin, x, y, size);
+        }
         *///?} else if <26.1 {
-        net.minecraft.world.entity.player.PlayerSkin skin;
-        if (online) { skin = info.getSkin(); SKINS.put(uuid, skin); }
-        else { Object seen = SKINS.get(uuid); skin = seen != null ? (net.minecraft.world.entity.player.PlayerSkin) seen : net.minecraft.client.resources.DefaultPlayerSkin.get(uuid); }
-        net.minecraft.client.gui.components.PlayerFaceRenderer.draw(g, skin, x, y, size);
+        if (!online && fetched != null) {
+            net.minecraft.client.gui.components.PlayerFaceRenderer.draw(g, (net.minecraft.resources.Identifier) fetched, x, y, size, true, false, -1);
+        } else {
+            net.minecraft.world.entity.player.PlayerSkin skin;
+            if (online) { skin = info.getSkin(); SKINS.put(uuid, skin); }
+            else { Object seen = SKINS.get(uuid); skin = seen != null ? (net.minecraft.world.entity.player.PlayerSkin) seen : net.minecraft.client.resources.DefaultPlayerSkin.get(uuid); }
+            net.minecraft.client.gui.components.PlayerFaceRenderer.draw(g, skin, x, y, size);
+        }
         //?} else {
-        /*net.minecraft.world.entity.player.PlayerSkin skin;
-        if (online) { skin = info.getSkin(); SKINS.put(uuid, skin); }
-        else { Object seen = SKINS.get(uuid); skin = seen != null ? (net.minecraft.world.entity.player.PlayerSkin) seen : net.minecraft.client.resources.DefaultPlayerSkin.get(uuid); }
-        var tex = skin.body().texturePath();
+        /*net.minecraft.resources.Identifier tex;
+        if (!online && fetched != null) {
+            tex = (net.minecraft.resources.Identifier) fetched;
+        } else {
+            net.minecraft.world.entity.player.PlayerSkin skin;
+            if (online) { skin = info.getSkin(); SKINS.put(uuid, skin); }
+            else { Object seen = SKINS.get(uuid); skin = seen != null ? (net.minecraft.world.entity.player.PlayerSkin) seen : net.minecraft.client.resources.DefaultPlayerSkin.get(uuid); }
+            tex = skin.body().texturePath();
+        }
         g.blit(net.minecraft.client.renderer.RenderPipelines.GUI_TEXTURED, tex, x, y, 8f, 8f, size, size, 8, 8, 64, 64, -1);
         g.blit(net.minecraft.client.renderer.RenderPipelines.GUI_TEXTURED, tex, x, y, 40f, 8f, size, size, 8, 8, 64, 64, -1);
         *///?}
