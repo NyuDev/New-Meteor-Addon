@@ -25,6 +25,9 @@ import java.util.function.Consumer;
  */
 public class LiveBuddyWindow extends LiveWindow {
 
+    /** The count of waiting messages. The one yellow in the window, so it is the one you see. */
+    private static final int UNREAD = 0xF2C94C;
+
     private static final int ROW = 14;
     private static final int PAD = 4;
     private static final int SEARCH_H = 13;
@@ -244,6 +247,16 @@ public class LiveBuddyWindow extends LiveWindow {
 
                 c.text(label, x + PAD + 14, rowY + 3,
                     LiveCanvas.withAlpha(module.nameColor(peer), alpha));
+
+                // How many are waiting, in yellow after the name. Yellow because nothing else in
+                // this window is: it has to be findable at a glance down a long list, which is
+                // the whole reason it is here and not only inside the conversation.
+                int unread = module.unread(peer);
+                if (unread > 0) {
+                    String badge = unread > 99 ? "99+" : Integer.toString(unread);
+                    c.text(badge, x + PAD + 18 + c.width(label), rowY + 3,
+                        LiveCanvas.withAlpha(UNREAD, alpha));
+                }
             }
 
             c.unclip();

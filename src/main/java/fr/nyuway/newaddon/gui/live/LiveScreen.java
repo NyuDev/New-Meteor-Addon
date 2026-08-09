@@ -56,13 +56,28 @@ public class LiveScreen extends Screen {
 
         // Every window open this session comes back with the screen; after a restart that set is
         // just the pinned ones. Either way the user need not find each person again.
-        for (UUID peer : module.openPeers()) openChat(peer);
+        for (UUID peer : module.openPeers()) openChat(peer, false);
+
+        // And anyone who wrote while you were not looking. Opening the menu to see who messaged
+        // you should not then mean hunting through a list for them: the people with something
+        // waiting are the reason the menu was opened, so they are already up.
+        //
+        // Opened after the remembered ones, so an unread conversation is what has focus rather
+        // than whatever happened to be open when the screen was last closed.
+        for (UUID peer : module.unreadPeers()) openChat(peer, false);
     }
 
-    private void openChat(UUID peer) {
+    /**
+     * @param picked true when the user asked for this conversation - a name clicked in the list,
+     *               or the window itself clicked - which is what counts as having read it. A
+     *               window the screen put up by itself keeps its count until it is looked at,
+     *               so opening the menu shows you what came in instead of quietly clearing it.
+     */
+    private void openChat(UUID peer, boolean picked) {
         for (LiveWindow window : windows) {
             if (window instanceof LiveChatWindow chat && chat.peer.equals(peer)) {
                 focus(window);
+                if (picked) module.markRead(peer);
                 return;
             }
         }
@@ -71,6 +86,12 @@ public class LiveScreen extends Screen {
         windows.add(chat);
         focus(chat);
         module.markOpen(peer);
+        if (picked) module.markRead(peer);
+    }
+
+    /** What the buddy list hands a click to: a name picked there is one the user chose. */
+    private void openChat(UUID peer) {
+        openChat(peer, true);
     }
 
     private void focus(LiveWindow window) {
@@ -121,6 +142,11 @@ public class LiveScreen extends Screen {
             if (!window.inWindow(mx, my)) continue;
 
             focus(window);
+
+            // Clicking a conversation is reading it - which is the moment the count beside the
+            // name in the list should go, and not before.
+            if (window instanceof LiveChatWindow chat) module.markRead(chat.peer);
+
             if (window.mouseClicked(mx, my, button)) windows.remove(window);
             return true;
         }

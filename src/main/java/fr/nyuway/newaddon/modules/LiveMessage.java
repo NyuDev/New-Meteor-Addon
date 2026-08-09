@@ -311,6 +311,11 @@ public class LiveMessage extends Module {
         boolean isNew = store.thread(peer).isEmpty();
         store.record(peer, hit.peer(), !isIncoming, hit.text(), selfId());
 
+        // Counted whether or not the window is open, and cleared only by looking at the
+        // conversation. A message that arrived while the screen was up but behind three other
+        // windows has not been read either.
+        if (isIncoming && !ignored) store.noteUnread(peer);
+
         if (isIncoming && isNew && announce.get() && !ignored) {
             info("New conversation with %s.", hit.peer());
         }
@@ -417,6 +422,27 @@ public class LiveMessage extends Module {
         if (value) pinned.add(peer);
         else pinned.remove(peer);
         store.savePinned(pinned);
+    }
+
+    /** Messages from them not looked at yet, for the count beside their name. */
+    public int unread(java.util.UUID peer) {
+        return store.unread(peer);
+    }
+
+    /** Everyone with something unread, so the screen can open those conversations by itself. */
+    public java.util.List<java.util.UUID> unreadPeers() {
+        return store.withUnread();
+    }
+
+    /**
+     * Marks a conversation read.
+     *
+     * <p>Called when the window is picked up - clicked in the list, or clicked on - and not when
+     * the screen opens it by itself. A window that appeared on its own still carries its count,
+     * so opening the menu shows you what came in rather than quietly clearing it.
+     */
+    public void markRead(java.util.UUID peer) {
+        store.markRead(peer);
     }
 
     /** Notes a window as open, so reopening the screen brings it back for the rest of the session. */

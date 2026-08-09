@@ -53,16 +53,14 @@ public class LiveWindow {
     private final long opened = System.currentTimeMillis();
 
     /**
-     * Where each kind of window was last left, kept for the session.
+     * Where this window was last left - position and size both, and across restarts.
      *
-     * <p>Dragging a window somewhere and finding it back in the middle next time is the sort
-     * of thing that makes a tool feel disposable. Keyed by a string the subclass chooses, so
-     * every conversation remembers its own spot rather than sharing one.
+     * <p>Keyed by a string the subclass chooses, so every conversation keeps its own spot rather
+     * than sharing one with the rest. {@link LivePlaces} holds the file; this is only the pair
+     * of calls that ask it.
      */
-    private static final java.util.Map<String, int[]> PLACES = new java.util.HashMap<>();
-
     protected void restorePlace(String key, int screenWidth, int screenHeight) {
-        int[] p = PLACES.get(key);
+        int[] p = LivePlaces.get(key);
         if (p == null) return;
 
         x = p[0];
@@ -73,7 +71,7 @@ public class LiveWindow {
     }
 
     protected void rememberPlace(String key) {
-        PLACES.put(key, new int[]{x, y, w, h});
+        LivePlaces.put(key, x, y, w, h);
     }
 
     protected final List<LiveButton> buttons = new ArrayList<>();

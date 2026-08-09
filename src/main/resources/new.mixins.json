@@ -5,7 +5,8 @@
 	"compatibilityLevel": "JAVA_21",
 	"client": [
 		"AbstractContainerScreenMixin",
-		"MultiPlayerGameModeMixin"
+		"MultiPlayerGameModeMixin",
+		"PlayerTabOverlayMixin"
 	],
 	"injectors": {
 		"defaultRequire": 0

@@ -1,6 +1,7 @@
 package fr.nyuway.newaddon.modules;
 
 import fr.nyuway.newaddon.NewAddon;
+import fr.nyuway.newaddon.utils.Enemies;
 import meteordevelopment.meteorclient.commands.Commands;
 import meteordevelopment.meteorclient.events.world.TickEvent;
 import meteordevelopment.meteorclient.settings.BoolSetting;
@@ -66,11 +67,25 @@ public class FriendSync extends Module {
         .defaultValue(List.of(";friend remove {name}"))
         .build());
 
+    private final Setting<List<String>> onEnemyAdd = sgGeneral.add(new StringListSetting.Builder()
+        .name("on-enemy-add")
+        .description("Commands sent when someone is added to the enemy list. {name} becomes " +
+                     "the player.")
+        .defaultValue(List.of(";enemy add {name}"))
+        .build());
+
+    private final Setting<List<String>> onEnemyRemove = sgGeneral.add(new StringListSetting.Builder()
+        .name("on-enemy-remove")
+        .description("Commands sent when someone is taken off the enemy list.")
+        .defaultValue(List.of(";enemy remove {name}"))
+        .build());
+
     private final Setting<List<String>> onSync = sgGeneral.add(new StringListSetting.Builder()
         .name("on-sync")
         .description("Commands that make the other client re-read Meteor's whole friend list. " +
-                     "Sent after joining a world and after every change, since a full sync " +
-                     "cannot drift the way a missed add can.")
+                     "Sent once after joining a world, and only then: a sync of this kind adds " +
+                     "what it finds and cannot know about anyone you removed, so a removal has " +
+                     "to be sent as its own command.")
         .defaultValue(List.of(";friend sync meteor"))
         .build());
 
@@ -93,6 +108,8 @@ public class FriendSync extends Module {
      * first tick sets the baseline, so turning the module on does not resend the whole list.
      */
     private Set<String> known;
+    /** The same, for the addon's own enemy list, which changes by the same routes. */
+    private Set<String> knownEnemies;
 
     /** Ticks in the current world, or -1 when out of one. Counts only as far as the join sync. */
     private int inWorld = -1;
@@ -105,6 +122,7 @@ public class FriendSync extends Module {
     @Override
     public void onActivate() {
         known = null;
+        knownEnemies = null;
         inWorld = -1;
     }
 
@@ -114,6 +132,7 @@ public class FriendSync extends Module {
             // Left the world. The baseline goes with it: the list can be edited between sessions,
             // and diffing against a stale one would fire a change that never happened.
             known = null;
+            knownEnemies = null;
             inWorld = -1;
             return;
         }
@@ -125,30 +144,43 @@ public class FriendSync extends Module {
 
         Set<String> names = new HashSet<>();
         for (var friend : Friends.get()) names.add(friend.getName());
-
-        boolean changed = false;
-        if (known != null) {
-            for (String name : names) {
-                if (!known.contains(name)) {
-                    fire(onAdd.get(), name);
-                    changed = true;
-                }
-            }
-            for (String name : known) {
-                if (!names.contains(name)) {
-                    fire(onRemove.get(), name);
-                    changed = true;
-                }
-            }
-        }
+        diff(known, names, onAdd.get(), onRemove.get());
         known = names;
 
-        // After the adds and removes, not instead of them: whichever end the other client
-        // understands, it ends up with the same list.
-        if (changed) sync();
+        Set<String> enemies = new HashSet<>(Enemies.names());
+        diff(knownEnemies, enemies, onEnemyAdd.get(), onEnemyRemove.get());
+        knownEnemies = enemies;
     }
 
-    /** Sends the sync commands. They carry no name - the point of them is the whole list. */
+    /**
+     * Fires a command for everything that appeared or disappeared since last tick.
+     *
+     * <p>No sync afterwards, deliberately. A sync tells the other client to read the list and
+     * take what is in it, which adds but never removes - so following a removal with one would
+     * either do nothing or, on a client that syncs both ways, put back what was just taken off.
+     * The per-name commands are what a change is actually sent as.
+     *
+     * @param before the previous set, or null on the first tick, when there is only a baseline
+     *               to establish and nothing to announce
+     */
+    private void diff(Set<String> before, Set<String> now, List<String> added, List<String> removed) {
+        if (before == null) return;
+
+        for (String name : now) {
+            if (!before.contains(name)) fire(added, name);
+        }
+        for (String name : before) {
+            if (!now.contains(name)) fire(removed, name);
+        }
+    }
+
+    /**
+     * Sends the sync commands. They carry no name - the point of them is the whole list.
+     *
+     * <p>Only on joining. It is the right thing for catching a client up with what it missed
+     * while it was closed, and the wrong thing for a change, which the add and remove commands
+     * carry exactly.
+     */
     private void sync() {
         fire(onSync.get(), "");
     }

@@ -58,6 +58,18 @@ public final class LiveStore {
         public String lastName;
         /** Muted: their messages still show and are kept, only the sound and toast are held. */
         public boolean isMuted;
+        /**
+         * Messages from them not looked at yet.
+         *
+         * <p>Counted as they arrive rather than worked out by comparing timestamps against a
+         * last-read mark. The mark would be tidier, but answering "how many" from it means
+         * reading the conversation off disk, and the buddy list asks once per row per frame -
+         * which is the shape of the bug that made dragging the window stutter.
+         *
+         * <p>An extra key in upstream's settings file. Its reader ignores what it does not
+         * know, so the two ports still coexist.
+         */
+        public int unread;
     }
 
     private final Path root;
@@ -158,6 +170,36 @@ public final class LiveStore {
 
     public PeerSettings settingsOf(UUID id) {
         return peers.computeIfAbsent(id, k -> new PeerSettings());
+    }
+
+    /** Messages from them not looked at yet. */
+    public int unread(UUID id) {
+        PeerSettings s = peers.get(id);
+        return s == null ? 0 : s.unread;
+    }
+
+    /** Anyone with something unread, newest conversation first. */
+    public List<UUID> withUnread() {
+        List<UUID> out = new ArrayList<>();
+        for (UUID id : peers()) {
+            if (unread(id) > 0) out.add(id);
+        }
+        return out;
+    }
+
+    /** One more from them, waiting to be looked at. */
+    public void noteUnread(UUID id) {
+        PeerSettings s = settingsOf(id);
+        s.unread++;
+        saveSettings(id, s);
+    }
+
+    /** They have been looked at. Writes nothing when there was nothing to clear. */
+    public void markRead(UUID id) {
+        PeerSettings s = settingsOf(id);
+        if (s.unread == 0) return;
+        s.unread = 0;
+        saveSettings(id, s);
     }
 
     /** UUID of a conversation whose last known name matches, or null. */

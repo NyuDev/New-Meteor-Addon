@@ -199,6 +199,12 @@ A whisper that lands with the window closed slides an advancement-style toast in
 top-right, showing the sender and a preview of what they said; the sound and the toast are
 independent, so either can carry the alert alone.
 
+Anything unread carries a yellow count beside the name in the list, and **opens by itself when
+you open the menu** — the people who wrote to you are the reason you opened it, so you should
+not then have to find them. A conversation counts as read when you pick it up, by clicking it or
+its name, and not when the screen put it there. Every window remembers where it was left and how
+big it was, across restarts.
+
 There is no flag on the wire saying "this is a whisper" — vanilla renders the line from a
 translation key and every server with its own format sends something else. So detection is by
 pattern, and the patterns are settings: an unrecognised server needs one line added, not a new
@@ -227,7 +233,8 @@ part of the client has to guess which colour you meant.
 
 Its colour sits with Meteor's own, in **Config → Visual → `enemy-color`**, right under
 `friend-color`, and it is read fresh each frame: change the swatch and the names and the skull
-follow immediately.
+follow immediately. Enemies are coloured **in the tab list** too, the way Meteor colours friends
+— which is the one place you look before deciding whether to land.
 
 ## 2b2tInvFix
 
@@ -253,16 +260,19 @@ event to hook, so it goes over the one channel every client already reads — ch
 Meteor's list fires a template with `{name}` filled in; a template starting with Meteor's own
 prefix is run locally instead of sent, so a client command never leaks to the server.
 
-The **sync** is the important half and runs on its own: telling the other client to re-read
-Meteor's whole list cannot drift the way a missed add can, so it goes out a few seconds after
-joining a world and again after every change. The add and remove commands still fire, for a
-client that only understands those.
+The enemy list rides along on the same channel, and changes to either one are sent as their own
+command.
+
+The **sync** goes out once, a few seconds after joining a world, and only then. It is the right
+thing for catching a client up with what it missed while it was closed — but a sync of this kind
+adds what it finds and cannot know about anyone you *removed*, so a removal is never sent that
+way. That is what `on-remove` is for.
 
 | Setting | Default | |
 | --- | --- | --- |
-| `on-add` | `;friend add {name}` | Sent when a friend is added. |
-| `on-remove` | `;friend remove {name}` | Sent when a friend is removed. |
-| `on-sync` | `;friend sync meteor` | Makes the other client re-read the whole list. |
+| `on-add` / `on-remove` | `;friend add {name}` / `;friend remove {name}` | A friend added or removed. |
+| `on-enemy-add` / `on-enemy-remove` | `;enemy add {name}` / `;enemy remove {name}` | The same for the enemy list. |
+| `on-sync` | `;friend sync meteor` | Makes the other client re-read the whole list, on join only. |
 | `sync-on-join` | on | Send it a few seconds after joining a world. |
 | `log` | off | Say in chat what was sent. |
 
