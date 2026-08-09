@@ -220,6 +220,36 @@ build. Group 1 is the other person, group 2 is the text.
 | `notify-toast` | on | Advancement-style toast, top-right, sender and preview, with the window closed. |
 | `incoming` / `outgoing` | vanilla + common | Detection patterns, on top of Livemessage's own `patterns/*.txt`. |
 
+## ElytraSwap
+
+Puts a fresh elytra on before the one you are wearing gives out, so a long flight is not ended
+by it. Ported from BepHax, defaults and all.
+
+There is no packet for "put this in my chest slot" — what there is, is that *using* an elytra in
+hand equips it and hands back whatever was there. So the swap is: get the spare onto the hotbar,
+hold it, right-click, put the worn one where the spare came from. One click per stage, five
+ticks apart, because each one is something the server has to agree with.
+
+The moves are hotbar swaps — the click a number key makes. One packet, a destination we choose,
+and it undoes itself: the same exchange that fetches the spare puts the old elytra in its place
+and returns the borrowed hotbar slot to its owner. Totems, gapples, pearls and chorus fruit are
+never the slot borrowed.
+
+**Combat protection** (off by default) is the other half: an elytra is no armour at all, so
+being hit puts a chestplate on for a few seconds and then goes back to the elytra. Another hit
+starts the clock over.
+
+| Setting | Default | |
+| --- | --- | --- |
+| `durability-threshold` | 10 | Swap once the worn elytra has less than this left. |
+| `only-while-flying` | off | Only swap while actually flying. |
+| `pause-in-inventory` | on | Do nothing while a container is open. |
+| `swap-cooldown` | 100 | Ticks before looking again after a swap. |
+| `notify-swap` | on | Say in chat when one is swapped. |
+| `swap-on-hit` | off | Wear a chestplate when something hits you. |
+| `protection-duration` | 60 | Ticks to keep it on. Another hit restarts it. |
+| `auto-swap-back` / `prioritize-netherite` | on / on | Return to the elytra after; prefer netherite over diamond. |
+
 ## Friends and enemies
 
 Meteor ships a friend list and no opposite, so this adds one: `.enemy add <name>`, `remove`,

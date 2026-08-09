@@ -4,6 +4,7 @@ import fr.nyuway.newaddon.commands.EnemyCommand;
 import fr.nyuway.newaddon.modules.AutoMoss;
 import fr.nyuway.newaddon.modules.AutoStasisPull;
 import fr.nyuway.newaddon.modules.ElytraResupply;
+import fr.nyuway.newaddon.modules.ElytraSwap;
 import fr.nyuway.newaddon.modules.FriendSync;
 import fr.nyuway.newaddon.modules.InvFix;
 import fr.nyuway.newaddon.modules.LiveMessage;
@@ -38,6 +39,7 @@ public class NewAddon extends MeteorAddon {
         Modules.get().add(new AutoStasisPull());
         Modules.get().add(new StasisProtection());
         Modules.get().add(new ElytraResupply());
+        Modules.get().add(new ElytraSwap());
         Modules.get().add(new LiveMessage());
         Modules.get().add(new FriendSync());
         Modules.get().add(new InvFix());
