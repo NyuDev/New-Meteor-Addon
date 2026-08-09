@@ -220,6 +220,45 @@ build. Group 1 is the other person, group 2 is the text.
 | `notify-toast` | on | Advancement-style toast, top-right, sender and preview, with the window closed. |
 | `incoming` / `outgoing` | vanilla + common | Detection patterns, on top of Livemessage's own `patterns/*.txt`. |
 
+## 2b2t.vc
+
+[api.2b2t.vc](https://api.2b2t.vc) keeps what the server itself does not: how long someone has
+played, when they were first and last seen, what the queue is doing, who has priority. `.2b2t`
+asks it a question at a time and prints the answer in chat.
+
+```
+.2b2t queue                     .2b2t stats <player>
+.2b2t online                    .2b2t seen <player>
+.2b2t time                      .2b2t playtime <player>
+.2b2t limit                     .2b2t deaths | kills | chats | connections <player>
+.2b2t word <word>               .2b2t prio <player>
+.2b2t top playtime | month | deaths | kills
+.2b2t refresh
+```
+
+`queue` also prints an ETA, worked out from the equation the API publishes rather than one
+hard-coded here.
+
+**On being a good guest.** The API is run by one person, for free, and publishes no rate limit —
+which is a reason to be careful, not a licence not to be. Requests go out one at a time on one
+thread with a floor on the gap between them (a second by default), every answer is cached for as
+long as it can still be true, and a "no data" is cached too so the one player the API has never
+heard of does not get asked about sixty times a second. Requests identify themselves with a
+User-Agent naming this addon, so whoever runs the API can see what the traffic is and block it if
+it ever becomes a nuisance.
+
+The **module** is what looks things up on its own, and where the limits above are set. With it
+on, the message window shows a line under each person's name — playtime, first seen, priority —
+and by default only while you are actually connected to 2b2t, since it is that server's data and
+nobody else's. The command works whether the module is on or off: you asked for that one.
+
+| Setting | Default | |
+| --- | --- | --- |
+| `request-interval` | 1000 ms | Floor on the gap between two requests. |
+| `player-cache` / `queue-cache` | 10 min / 20 s | How long an answer is kept. |
+| `only-on-2b2t` / `server-host` | on / `2b2t.org` | Only look up while connected there. Matched on the end of the address. |
+| `show-in-messages` | on | The line under a name in the message window. |
+
 ## ElytraSwap
 
 Puts a fresh elytra on before the one you are wearing gives out, so a long flight is not ended

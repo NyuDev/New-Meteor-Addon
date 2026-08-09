@@ -1,6 +1,7 @@
 package fr.nyuway.newaddon;
 
 import fr.nyuway.newaddon.commands.EnemyCommand;
+import fr.nyuway.newaddon.commands.VcCommand;
 import fr.nyuway.newaddon.modules.AutoMoss;
 import fr.nyuway.newaddon.modules.AutoStasisPull;
 import fr.nyuway.newaddon.modules.ElytraResupply;
@@ -8,6 +9,7 @@ import fr.nyuway.newaddon.modules.ElytraSwap;
 import fr.nyuway.newaddon.modules.FriendSync;
 import fr.nyuway.newaddon.modules.InvFix;
 import fr.nyuway.newaddon.modules.LiveMessage;
+import fr.nyuway.newaddon.modules.ServerStats;
 import fr.nyuway.newaddon.modules.StasisProtection;
 import fr.nyuway.newaddon.modules.StasisPull;
 import fr.nyuway.newaddon.utils.Enemies;
@@ -22,6 +24,14 @@ import org.slf4j.LoggerFactory;
 public class NewAddon extends MeteorAddon {
 
     public static final Logger LOG = LoggerFactory.getLogger("New");
+
+    /** This addon's version, for the User-Agent it identifies itself with over HTTP. */
+    public static String version() {
+        return net.fabricmc.loader.api.FabricLoader.getInstance()
+            .getModContainer("new")
+            .map(c -> c.getMetadata().getVersion().getFriendlyString())
+            .orElse("dev");
+    }
     public static final Category CATEGORY = new Category("New");
 
     @Override
@@ -43,8 +53,10 @@ public class NewAddon extends MeteorAddon {
         Modules.get().add(new LiveMessage());
         Modules.get().add(new FriendSync());
         Modules.get().add(new InvFix());
+        Modules.get().add(new ServerStats());
 
         Commands.add(new EnemyCommand());
+        Commands.add(new VcCommand());
 
         // Both belong here rather than in a module. The colour has to be registered in the
         // window between Systems.init() and Systems.load() or it will not remember what it was

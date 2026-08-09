@@ -2,7 +2,9 @@ package fr.nyuway.newaddon.gui.live;
 
 import fr.nyuway.newaddon.modules.LiveMessage;
 import fr.nyuway.newaddon.modules.dm.LiveStore;
+import fr.nyuway.newaddon.modules.ServerStats;
 import fr.nyuway.newaddon.utils.Enemies;
+import fr.nyuway.newaddon.utils.vc.VcTypes;
 
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
@@ -24,6 +26,41 @@ import java.util.UUID;
  * person in the first place.
  */
 public class LiveChatWindow extends LiveWindow {
+
+    /**
+     * A line of what api.2b2t.vc knows about them, under the online line.
+     *
+     * <p>Asked once a frame and answered from a cache, which returns nothing the first time and
+     * starts a request behind it - so nothing here waits on the network, and the line simply
+     * appears a moment later. Off unless the module says otherwise, and by default only while
+     * actually on 2b2t, since it is that server's data and nobody else's.
+     */
+    private void drawServerInfo(LiveCanvas c, float alpha) {
+        if (!ServerStats.showInMessages()) return;
+
+        var stats = ServerStats.statsFor(peer);
+        if (stats == null) return;
+
+        StringBuilder line = new StringBuilder();
+        line.append(VcTypes.playtime(VcTypes.or0(stats.playtimeSeconds))).append(" played");
+        if (stats.firstSeen != null) {
+            line.append(" - since ").append(VcTypes.date(stats.firstSeen));
+        }
+        if (Boolean.TRUE.equals(stats.prio)) line.append(" - priority");
+
+        // Trimmed to the window rather than drawn over its edge, since the name beside it can
+        // be any length and the window can be dragged narrow.
+        String text = line.toString();
+        int room = w - 46;
+        while (text.length() > 4 && c.width(text) > room) {
+            text = text.substring(0, text.length() - 2);
+        }
+
+        c.text(text, x + 42, y + TITLEBAR + 36, LiveCanvas.withAlpha(VC_INFO, alpha));
+    }
+
+    /** The 2b2t.vc line: dimmer than a name, distinct from the grey of the UUID under it. */
+    private static final int VC_INFO = 0x7FA6C4;
 
     /** Meteor's friend colour, packed the way the icons want it. Asked for, never kept. */
     private static int friendColor() {
@@ -292,6 +329,8 @@ public class LiveChatWindow extends LiveWindow {
         c.text(peer.toString(), x + 42, y + TITLEBAR + 16, LiveCanvas.withAlpha(INACTIVE, alpha));
         c.text(online ? "online" : "offline", x + 42, y + TITLEBAR + 26,
             LiveCanvas.withAlpha(INACTIVE, alpha));
+
+        drawServerInfo(c, alpha);
 
         // The reply box grows with its wrapped content up to a cap that still leaves the history
         // a few lines, then scrolls within itself. The history takes whatever is left above it.
