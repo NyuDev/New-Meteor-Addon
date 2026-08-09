@@ -28,39 +28,101 @@ import java.util.UUID;
 public class LiveChatWindow extends LiveWindow {
 
     /**
-     * A line of what api.2b2t.vc knows about them, under the online line.
+     * The short version, beside "online": how long they have played and whether they have prio.
      *
      * <p>Asked once a frame and answered from a cache, which returns nothing the first time and
-     * starts a request behind it - so nothing here waits on the network, and the line simply
-     * appears a moment later. Off unless the module says otherwise, and by default only while
-     * actually on 2b2t, since it is that server's data and nobody else's.
+     * starts a request behind it - so nothing here waits on the network and the text simply
+     * appears a moment later. Everything else is a click on the head away.
      */
-    private void drawServerInfo(LiveCanvas c, float alpha) {
+    private void drawSummary(LiveCanvas c, float alpha, int after) {
         if (!ServerStats.showInMessages()) return;
 
         var stats = ServerStats.statsFor(peer);
         if (stats == null) return;
 
-        StringBuilder line = new StringBuilder();
-        line.append(VcTypes.playtime(VcTypes.or0(stats.playtimeSeconds))).append(" played");
-        if (stats.firstSeen != null) {
-            line.append(" - since ").append(VcTypes.date(stats.firstSeen));
-        }
-        if (Boolean.TRUE.equals(stats.prio)) line.append(" - priority");
+        String text = " - " + VcTypes.playtime(VcTypes.or0(stats.playtimeSeconds))
+            + (Boolean.TRUE.equals(stats.prio) ? " - priority" : "");
 
-        // Trimmed to the window rather than drawn over its edge, since the name beside it can
-        // be any length and the window can be dragged narrow.
-        String text = line.toString();
-        int room = w - 46;
+        // Trimmed to the window rather than drawn over its edge: the name beside it can be any
+        // length and the window can be dragged narrow.
+        int room = x + w - 6 - after;
         while (text.length() > 4 && c.width(text) > room) {
             text = text.substring(0, text.length() - 2);
         }
 
-        c.text(text, x + 42, y + TITLEBAR + 36, LiveCanvas.withAlpha(VC_INFO, alpha));
+        c.text(text, after, y + TITLEBAR + 26, LiveCanvas.withAlpha(VC_INFO, alpha));
     }
 
-    /** The 2b2t.vc line: dimmer than a name, distinct from the grey of the UUID under it. */
+    /**
+     * Everything the API knows, over the history, opened by clicking their head.
+     *
+     * <p>A panel rather than more header lines. The header is four lines tall and was already
+     * full; a fifth sat over the box below it, which is what this looked like. And a panel can
+     * hold what a line cannot - the UUID in full, both playtimes, the counts - without any of it
+     * being in the way of the conversation, which is what the window is actually for.
+     */
+    private void drawInfoPanel(LiveCanvas c, int top, int height, float alpha) {
+        int px = x + BOX_X + 6;
+        int py = top + 6;
+        int pw = w - 10 - 12;
+        int ph = Math.min(height - 12, 112);
+
+        c.box(px - 1, py - 1, pw + 2, ph + 2, LiveCanvas.withAlpha(LiveColors.rgb(80, 80, 80), alpha));
+        c.box(px, py, pw, ph, LiveCanvas.withAlpha(LiveColors.rgb(22, 22, 26), alpha));
+
+        int line = py + 6;
+        int text = LiveCanvas.withAlpha(0xD8D8D8, alpha);
+        int dim = LiveCanvas.withAlpha(INACTIVE, alpha);
+
+        c.text(name(), px + 6, line, LiveCanvas.withAlpha(module.nameColor(peer), alpha));
+        c.text("click the head to close", px + pw - 6 - c.width("click the head to close"),
+            line, dim);
+        line += 13;
+
+        // The UUID lives here rather than in the header. It is the one thing about someone that
+        // never changes, so it is worth being able to see - but not worth a line of the window
+        // every second of every conversation.
+        c.text(peer.toString(), px + 6, line, dim);
+        line += 13;
+
+        var stats = ServerStats.statsFor(peer);
+        if (stats == null) {
+            c.text(ServerStats.showInMessages()
+                ? "asking 2b2t.vc..."
+                : "2b2t.vc lookups are off, or you are not on 2b2t.", px + 6, line, dim);
+            return;
+        }
+
+        c.text("Playtime  " + VcTypes.playtime(VcTypes.or0(stats.playtimeSeconds))
+            + "   (" + VcTypes.playtime(VcTypes.or0(stats.playtimeSecondsMonth))
+            + " this month)", px + 6, line, text);
+        line += 11;
+
+        c.text("First seen  " + VcTypes.date(stats.firstSeen), px + 6, line, text);
+        line += 11;
+        c.text("Last seen  " + VcTypes.date(stats.lastSeen), px + 6, line, text);
+        line += 11;
+
+        c.text("Joins " + VcTypes.or0(stats.joinCount)
+            + "   Deaths " + VcTypes.or0(stats.deathCount)
+            + "   Kills " + VcTypes.or0(stats.killCount)
+            + "   Chats " + VcTypes.or0(stats.chatsCount), px + 6, line, text);
+        line += 11;
+
+        c.text(Boolean.TRUE.equals(stats.prio) ? "Priority queue" : "No priority", px + 6, line,
+            LiveCanvas.withAlpha(Boolean.TRUE.equals(stats.prio) ? 0x8AD98A : 0x9A9A9A, alpha));
+    }
+
+    /** Whether a click landed on the avatar block, which is what opens and closes the panel. */
+    private boolean onHead(int mouseX, int mouseY) {
+        return inRect(3, TITLEBAR + 3, 36, 36, mouseX, mouseY);
+    }
+
+    /** The 2b2t.vc text: dimmer than a name, distinct from the grey of the UUID. */
     private static final int VC_INFO = 0x7FA6C4;
+
+    /** True while the panel opened by clicking the head is showing. */
+    private boolean showingInfo;
 
     /** Meteor's friend colour, packed the way the icons want it. Asked for, never kept. */
     private static int friendColor() {
@@ -205,6 +267,13 @@ public class LiveChatWindow extends LiveWindow {
 
     @Override
     public boolean mouseClicked(int mouseX, int mouseY, int button) {
+        // The head is the way in and the way out. Claimed before the titlebar drag, or grabbing
+        // the window by its avatar would toggle the panel on every move.
+        if (onHead(mouseX, mouseY)) {
+            showingInfo = !showingInfo;
+            return false;
+        }
+
         // The scrollbar is claimed before the window's own drag/resize, so a grab on it never
         // moves the window instead.
         if (inScrollbar(mouseX, mouseY)) {
@@ -327,10 +396,12 @@ public class LiveChatWindow extends LiveWindow {
         c.text(name(), x + 42, y + TITLEBAR + 5,
             LiveCanvas.withAlpha(module.nameColor(peer), alpha));
         c.text(peer.toString(), x + 42, y + TITLEBAR + 16, LiveCanvas.withAlpha(INACTIVE, alpha));
+        // The 2b2t.vc summary rides on the presence line rather than under it. Its own line sat
+        // at the very bottom of the header, half of it over the history box below - there was
+        // never room for a fourth line there, and the full detail belongs in the panel anyway.
         c.text(online ? "online" : "offline", x + 42, y + TITLEBAR + 26,
             LiveCanvas.withAlpha(INACTIVE, alpha));
-
-        drawServerInfo(c, alpha);
+        drawSummary(c, alpha, x + 42 + c.width(online ? "online" : "offline"));
 
         // The reply box grows with its wrapped content up to a cap that still leaves the history
         // a few lines, then scrolls within itself. The history takes whatever is left above it.
@@ -354,7 +425,8 @@ public class LiveChatWindow extends LiveWindow {
         c.box(x + BOX_X, inputTop, w - 10, inputBoxH,
             LiveCanvas.withAlpha(LiveColors.rgb(24, 24, 24), alpha));
 
-        drawHistory(c, historyH, foreground, alpha);
+        if (showingInfo) drawInfoPanel(c, contentTop, historyH, alpha);
+        else drawHistory(c, historyH, foreground, alpha);
 
         c.clip(x + BOX_X + 3, inputTop + 2, inW, inputBoxH - 4);
         input.draw(c, x + BOX_X + 3, inputTop + 2, inputLines, active, alpha);

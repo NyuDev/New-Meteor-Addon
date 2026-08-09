@@ -1,8 +1,11 @@
 package fr.nyuway.newaddon.modules;
 
 import fr.nyuway.newaddon.NewAddon;
+import fr.nyuway.newaddon.utils.vc.Markers;
 import fr.nyuway.newaddon.utils.vc.VcApi;
 import fr.nyuway.newaddon.utils.vc.VcTypes;
+import meteordevelopment.meteorclient.events.game.SendMessageEvent;
+import meteordevelopment.orbit.EventHandler;
 import meteordevelopment.meteorclient.settings.BoolSetting;
 import meteordevelopment.meteorclient.settings.IntSetting;
 import meteordevelopment.meteorclient.settings.Setting;
@@ -74,6 +77,16 @@ public class ServerStats extends Module {
         .visible(onlyOn2b2t::get)
         .build());
 
+    private final SettingGroup sgMarkers = settings.createGroup("Markers");
+
+    private final Setting<Boolean> markers = sgMarkers.add(new BoolSetting.Builder()
+        .name("expand-markers")
+        .description("Replace {queue}, {online}, {playtime} and the rest with their value when " +
+                     "a message or a sign is sent. A backslash escapes one: \\{queue} is sent " +
+                     "as written. Run .2b2t markers to see them all.")
+        .defaultValue(true)
+        .build());
+
     private final Setting<Boolean> inLiveMessage = sgLive.add(new BoolSetting.Builder()
         .name("show-in-messages")
         .description("Put what the API knows about someone under their name in the message " +
@@ -108,6 +121,26 @@ public class ServerStats extends Module {
         if (module == null || !module.isActive()) return false;
         module.apply();
         return !module.onlyOn2b2t.get() || onServer(module.serverHost.get());
+    }
+
+    /**
+     * Expands markers in anything about to be sent as chat or a command.
+     *
+     * <p>Meteor's own event, so this catches the chat box, its command line, and anything else
+     * that sends through the client - without a mixin, and identically on every version.
+     */
+    @EventHandler
+    private void onSendMessage(SendMessageEvent event) {
+        if (!markers.get() || !Markers.present(event.message)) return;
+        event.message = Markers.expand(event.message);
+    }
+
+    /** Whether a sign or anything else outside this module should expand markers. */
+    public static boolean expandMarkers() {
+        ServerStats module = get();
+        if (module == null || !module.isActive() || !module.markers.get()) return false;
+        module.apply();
+        return true;
     }
 
     /** Whether the message window should show what the API knows. */

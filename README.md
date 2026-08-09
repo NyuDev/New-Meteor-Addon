@@ -248,9 +248,31 @@ User-Agent naming this addon, so whoever runs the API can see what the traffic i
 it ever becomes a nuisance.
 
 The **module** is what looks things up on its own, and where the limits above are set. With it
-on, the message window shows a line under each person's name — playtime, first seen, priority —
-and by default only while you are actually connected to 2b2t, since it is that server's data and
-nobody else's. The command works whether the module is on or off: you asked for that one.
+on, the message window puts a short version beside "online" — how long they have played, whether
+they have priority — and **clicking their head opens a panel** with the rest: the UUID in full,
+both playtimes, first and last seen, joins, deaths, kills, chats. Click the head again to close
+it. By default none of this happens unless you are actually connected to 2b2t, since it is that
+server's data and nobody else's. The command works whether the module is on or off: you asked
+for that one.
+
+### Markers
+
+`{queue}` and its friends, written into any text field and replaced with the value at the moment
+it is sent — which is the point of having one on a sign, where it is written once and read for
+years. A backslash sends it as written: `\{queue}` arrives as `{queue}`. `.2b2t markers` lists
+them all with what each is worth right now.
+
+```
+{queue} {queue_prio} {eta}          {online} {prio_count} {bot_count}
+{mctime}  {me}                      {playtime} {playtime_month}
+{firstseen} {lastseen}              {deaths} {kills}
+```
+
+Chat, commands and signs. Values come from the same cache as everything else, so sending a
+message never waits on a web request — a marker whose answer has not arrived yet is sent as `?`
+and will be there the next time. A marker that is not one of these is left exactly as typed: a
+brace someone meant to type is far likelier than a marker misspelt, and eating it is the worse
+of the two mistakes.
 
 | Setting | Default | |
 | --- | --- | --- |

@@ -3,6 +3,7 @@ package fr.nyuway.newaddon.commands;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import fr.nyuway.newaddon.modules.ServerStats;
+import fr.nyuway.newaddon.utils.vc.Markers;
 import fr.nyuway.newaddon.utils.vc.VcApi;
 import fr.nyuway.newaddon.utils.vc.VcTypes;
 import meteordevelopment.meteorclient.commands.Command;
@@ -228,6 +229,17 @@ public class VcCommand extends Command {
                             Boolean.TRUE.equals(s.prio) ? "has" : "does not have"));
                 return OK;
             })));
+
+        // Markers, with what each is worth right now. Values come from the cache, so anything
+        // not fetched yet shows as ? and is fetched behind this - ask again and it will be there.
+        builder.then(literal("markers").executes(ctx -> {
+            info("Markers, replaced when a message or a sign is sent:");
+            for (String name : Markers.names()) {
+                info("  {%s} = %s", name, Markers.value(name));
+            }
+            info("A backslash sends one as written: \\{queue}");
+            return OK;
+        }));
 
         builder.then(literal("refresh").executes(ctx -> {
             VcApi.clearCache();
