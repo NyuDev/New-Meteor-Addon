@@ -172,6 +172,11 @@ public final class LiveStore {
         return peers.computeIfAbsent(id, k -> new PeerSettings());
     }
 
+    /** How many conversations there are, without sorting them to find out. */
+    public int peerCount() {
+        return lastActivity.size();
+    }
+
     /** Messages from them not looked at yet. */
     public int unread(UUID id) {
         PeerSettings s = peers.get(id);

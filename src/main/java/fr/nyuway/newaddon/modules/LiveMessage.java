@@ -625,6 +625,16 @@ public class LiveMessage extends Module {
         return ids;
     }
 
+    /** How many are loaded around us, without building a list to count it. */
+    public int renderCount() {
+        return mc.level == null ? 0 : mc.level.players().size();
+    }
+
+    /** How many are on the server, without building a list to count it. */
+    public int onlineCount() {
+        return mc.getConnection() == null ? 0 : mc.getConnection().getOnlinePlayers().size();
+    }
+
     /** Everyone on the server right now, so the list can offer people never spoken to. */
     public java.util.List<java.util.UUID> onlinePlayers() {
         java.util.List<java.util.UUID> ids = new java.util.ArrayList<>();
