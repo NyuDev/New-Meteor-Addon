@@ -325,6 +325,11 @@ public class LiveMessage extends Module {
         // windows has not been read either.
         if (isIncoming && !ignored) store.noteUnread(peer);
 
+        // A conversation you started is one you are in. Writing to someone from the chat box
+        // with a plain /msg used to leave the menu knowing nothing about it, so their window
+        // was not there the next time it was opened - which is precisely when you want it.
+        if (!isIncoming) open.add(peer);
+
         if (isIncoming && isNew && announce.get() && !ignored) {
             info("New conversation with %s.", hit.peer());
         }
@@ -396,6 +401,11 @@ public class LiveMessage extends Module {
      * matters. Everyone else keeps the colour generated from their UUID.
      */
     public int colorOf(java.util.UUID peer) {
+        // An enemy first, and before the friend colour. The window is the thing you look at
+        // while typing to someone; if they are on the enemy list that is the single most
+        // important fact about them, and it was the one thing the frame did not say.
+        if (isEnemy(peer)) return Enemies.color();
+
         if (friendColor.get() && isFriend(peer)) {
             var c = meteordevelopment.meteorclient.systems.config.Config.get().friendColor.get();
             return (c.r << 16) | (c.g << 8) | c.b;
@@ -659,6 +669,11 @@ public class LiveMessage extends Module {
 
         String command = sendCommand.get().trim();
         if (!command.startsWith("/")) command = "/" + command;
+
+        // Asked here rather than left to the chat event: this goes out through ChatUtils, which
+        // talks to the connection directly and never touches the chat screen - so the guard on
+        // the chat box does not see it, and a whisper is exactly where a base gets given away.
+        if (!ChatProtect.allow(command + " " + peer + " " + text, true)) return;
 
         ChatUtils.sendPlayerMsg(command + " " + peer + " " + text);
 

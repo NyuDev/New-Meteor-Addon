@@ -327,6 +327,33 @@ Its colour sits with Meteor's own, in **Config → Visual → `enemy-color`**, r
 follow immediately. Enemies are coloured **in the tab list** too, the way Meteor colours friends
 — which is the one place you look before deciding whether to land.
 
+## ChatProtect
+
+A base is only a base until somebody types where it is, and that mistake is made in a hurry, in
+a whisper meant for one person, and cannot be taken back once the packet is gone. So the message
+simply does not go.
+
+There is no "are you sure" on purpose: a confirmation gets answered in the same second and with
+the same haste that typed the coordinates. Turning the module off to send is a deliberate second
+thought rather than a reflex.
+
+Every route out is covered — the chat box, commands (so `/msg` and `/w` are caught), and the
+reply box in the message window, which sends through the client rather than the chat screen and
+would otherwise walk straight past.
+
+The judging is not one enormous regular expression. Numbers are found with a small pattern, then
+a run of them standing together with nothing but separators between counts as a location when it
+carries an x/y/z label or holds a number too big to be a count of something. `x3 y4 z5` is a
+location; `i got 3 4 5 diamonds` is a sentence.
+
+| Setting | Default | |
+| --- | --- | --- |
+| `block-coordinates` | on | Refuse messages that read like a location. |
+| `numbers-in-a-row` | 2 | Two catches an x and z pair, which is how most are given. |
+| `magnitude` | 100 | A number this big counts on its own; smaller ones need a label. |
+| `check-chat` / `check-commands` / `check-messages` | on | Chat, slash commands, and the LiveMessage reply box. |
+| `allowed-commands` | Baritone's | Never checked: they take coordinates by design and talk to your own client. |
+
 ## 2b2tInvFix
 
 Two things the client does that 2b2t will not accept, stopped before it does them. Brought over
