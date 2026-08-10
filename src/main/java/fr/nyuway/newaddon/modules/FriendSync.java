@@ -142,6 +142,15 @@ public class FriendSync extends Module {
             if (inWorld == JOIN_DELAY && syncOnJoin.get()) sync();
         }
 
+        // A bypass empties the list and fills it again minutes later. Sending that out is a
+        // hundred commands about a fight the other client cannot see, and it would leave that
+        // client's list wrong for as long as the fight lasts. The baseline is dropped with it,
+        // so what comes back is not read as fifty additions either.
+        if (FriendBypass.silencingSync()) {
+            known = null;
+            return;
+        }
+
         Set<String> names = new HashSet<>();
         for (var friend : Friends.get()) names.add(friend.getName());
         diff(known, names, onAdd.get(), onRemove.get());

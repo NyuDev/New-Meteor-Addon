@@ -2,6 +2,7 @@ package fr.nyuway.newaddon.modules;
 
 import fr.nyuway.newaddon.NewAddon;
 import meteordevelopment.meteorclient.settings.BoolSetting;
+import meteordevelopment.meteorclient.settings.IntSetting;
 import meteordevelopment.meteorclient.settings.Setting;
 import meteordevelopment.meteorclient.settings.SettingGroup;
 import meteordevelopment.meteorclient.systems.modules.Module;
@@ -42,6 +43,38 @@ public class InvFix extends Module {
                      "not stack, and what you are left looking at is a ghost.")
         .defaultValue(true)
         .build());
+
+    private final Setting<Integer> openInterval = sgGeneral.add(new IntSetting.Builder()
+        .name("container-open-interval")
+        .description("Milliseconds between two container opens. 2b2t drops a connection that " +
+                     "asks too fast, and clicking down a row of chests is the easiest way to " +
+                     "ask too fast. Zero turns it off.")
+        .defaultValue(250).min(0).max(2000).sliderRange(0, 1000)
+        .build());
+
+    /** When a container was last opened, so the next one can be made to wait its turn. */
+    private static long lastOpen;
+
+    /**
+     * Whether a container may be opened right now.
+     *
+     * <p>Called from the mixin that sees the right-click. A refused open is a click that did
+     * nothing, which is the same thing that happens when you click a chest that is not there -
+     * and far better than being dropped from the server for a second.
+     */
+    public static boolean mayOpenContainer() {
+        InvFix module = get();
+        if (module == null || !module.isActive()) return true;
+
+        int interval = module.openInterval.get();
+        if (interval <= 0) return true;
+
+        long now = System.currentTimeMillis();
+        if (now - lastOpen < interval) return false;
+
+        lastOpen = now;
+        return true;
+    }
 
     public InvFix() {
         super(NewAddon.CATEGORY, "2b2t-inv-fix",

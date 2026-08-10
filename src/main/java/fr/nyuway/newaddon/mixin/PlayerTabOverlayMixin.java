@@ -41,7 +41,10 @@ public class PlayerTabOverlayMixin {
         Component drawn = callback.getReturnValue();
         if (drawn == null) return;
 
+        // Flattened, not recoloured in place: a component's children keep their own styles and
+        // a colour set on the parent loses to them, which is a quiet way to draw nothing.
         TextColor colour = TextColor.fromRgb(Enemies.color());
-        callback.setReturnValue(drawn.copy().withStyle(style -> style.withColor(colour)));
+        callback.setReturnValue(Component.literal(drawn.getString())
+            .withStyle(style -> style.withColor(colour)));
     }
 }

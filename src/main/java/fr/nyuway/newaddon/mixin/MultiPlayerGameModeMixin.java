@@ -52,6 +52,38 @@ public class MultiPlayerGameModeMixin {
     *///?}
 
     /**
+     * Paces container opens, so clicking down a row of chests does not cost the connection.
+     *
+     * <p>2b2t drops a client that asks too fast, and a right-click held down a wall of chests is
+     * the easiest way to ask too fast. A refused open is a click that did nothing, which is
+     * exactly what a click on a chest that is not there looks like, and much better than being
+     * dropped from the server for a second.
+     *
+     * <p>Only container blocks are paced. Everything else - doors, buttons, placing - goes
+     * through untouched, because none of it is what the server is counting.
+     */
+    @Inject(method = "useItemOn", at = @At("HEAD"), cancellable = true, require = 0)
+    private void newAddon$paceContainerOpens(
+        net.minecraft.client.player.LocalPlayer player,
+        net.minecraft.world.InteractionHand hand,
+        net.minecraft.world.phys.BlockHitResult hit,
+        org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable
+            <net.minecraft.world.InteractionResult> callback) {
+
+        if (player == null || hit == null || player.isShiftKeyDown()) return;
+
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.level == null) return;
+
+        var block = mc.level.getBlockState(hit.getBlockPos()).getBlock();
+        if (!(block instanceof net.minecraft.world.level.block.BaseEntityBlock)) return;
+
+        if (!InvFix.mayOpenContainer()) {
+            callback.setReturnValue(net.minecraft.world.InteractionResult.FAIL);
+        }
+    }
+
+    /**
      * Whether this shift-click has no destination: the half of the window it would move the
      * stack into has neither an empty slot for it nor a matching stack with room left.
      */
