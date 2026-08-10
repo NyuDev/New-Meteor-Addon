@@ -6,6 +6,7 @@
 	"client": [
 		"AbstractContainerScreenMixin",
 		"BetterTabMixin",
+		"GuiGraphicsMixin",
 		"AbstractSignEditScreenMixin",
 		"MultiPlayerGameModeMixin",
 		"PlayerTabOverlayMixin"

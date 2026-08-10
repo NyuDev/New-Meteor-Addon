@@ -11,6 +11,7 @@ import fr.nyuway.newaddon.modules.FriendSync;
 import fr.nyuway.newaddon.modules.InvFix;
 import fr.nyuway.newaddon.modules.LiveMessage;
 import fr.nyuway.newaddon.modules.ServerStats;
+import fr.nyuway.newaddon.modules.ShulkerOverview;
 import fr.nyuway.newaddon.modules.StasisProtection;
 import fr.nyuway.newaddon.modules.StasisPull;
 import fr.nyuway.newaddon.utils.Enemies;
@@ -56,6 +57,7 @@ public class NewAddon extends MeteorAddon {
         Modules.get().add(new FriendBypass());
         Modules.get().add(new InvFix());
         Modules.get().add(new ServerStats());
+        Modules.get().add(new ShulkerOverview());
 
         Commands.add(new EnemyCommand());
         Commands.add(new VcCommand());
