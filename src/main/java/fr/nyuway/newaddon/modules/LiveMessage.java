@@ -699,10 +699,17 @@ public class LiveMessage extends Module {
         return ids;
     }
 
-    /** Whether that player is on the server right now, for the dot beside their name. */
+    /**
+     * Whether that player is on the server right now.
+     *
+     * <p>Asked by every open window every frame - it decides whether the reply box is usable -
+     * so it goes through the tab list's own map rather than {@code getOnlinePlayerIds}, which is
+     * declared as a plain Collection and promises nothing about what {@code contains} costs.
+     * Looking a UUID up is one hash lookup on every version; walking five hundred of them, four
+     * windows deep, at a hundred frames a second, is not.
+     */
     public boolean isOnline(java.util.UUID peer) {
-        if (mc.getConnection() == null) return false;
-        return mc.getConnection().getOnlinePlayerIds().contains(peer);
+        return mc.getConnection() != null && mc.getConnection().getPlayerInfo(peer) != null;
     }
 
     /** Sends a reply through the server's own command, and records it straight away. */

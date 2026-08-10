@@ -368,10 +368,19 @@ public class LiveChatWindow extends LiveWindow {
         return true;
     }
 
-    /** @return true when something was actually sent */
+    /**
+     * @return true when something was actually sent
+     *
+     * <p>Nothing goes to somebody who is not on the server. The server answers a whisper to an
+     * absent player by saying so in chat, which is a public admission that you tried - and the
+     * message is gone either way. What you typed is kept, so it is there when they come back
+     * rather than lost to a keystroke.
+     */
     public boolean send() {
         String text = input.text().trim();
         if (text.isEmpty()) return false;
+
+        if (!module.isOnline(peer)) return false;
 
         input.clear();
         module.send(name(), text);
@@ -444,10 +453,17 @@ public class LiveChatWindow extends LiveWindow {
         c.box(x + BOX_X, contentTop, w - 10, historyH,
             LiveCanvas.withAlpha(LiveColors.rgb(36, 36, 36), alpha));
 
+        // The reply box says whether it will work. Offline it is outlined red with a mark at the
+        // right end, after Bephax - a box that looks ready to type into and silently drops what
+        // you typed is worse than one that says no before you start.
+        //
+        // Read straight from the tab list each frame, so it turns red the moment they leave and
+        // back the moment they return. That costs one set lookup, which is the whole reason the
+        // question is asked here rather than being cached and going stale.
         c.box(x + BOX_X - 1, inputTop - 1, w - 10 + 2, inputBoxH + 2,
-            LiveCanvas.withAlpha(grey64, alpha));
+            LiveCanvas.withAlpha(online ? grey64 : OFFLINE_EDGE, alpha));
         c.box(x + BOX_X, inputTop, w - 10, inputBoxH,
-            LiveCanvas.withAlpha(LiveColors.rgb(24, 24, 24), alpha));
+            LiveCanvas.withAlpha(online ? LiveColors.rgb(24, 24, 24) : OFFLINE_FILL, alpha));
 
         if (showingInfo) drawInfoPanel(c, contentTop, historyH, alpha);
         else drawHistory(c, historyH, foreground, alpha);
@@ -455,7 +471,19 @@ public class LiveChatWindow extends LiveWindow {
         c.clip(x + BOX_X + 3, inputTop + 2, inW, inputBoxH - 4);
         input.draw(c, x + BOX_X + 3, inputTop + 2, inputLines, active, alpha);
         c.unclip();
+
+        // At the right end of the box, over the text, because that is the one place a long
+        // reply cannot push it out of.
+        if (!online) {
+            c.text("!", x + BOX_X + w - 10 - 6 - c.width("!"), inputTop + inputBoxH / 2 - 4,
+                LiveCanvas.withAlpha(OFFLINE_MARK, alpha));
+        }
     }
+
+    /** The reply box while they are away: a red edge, a darker red fill, and a red mark. */
+    private static final int OFFLINE_EDGE = 0x8A3A3A;
+    private static final int OFFLINE_FILL = 0x2A1A1A;
+    private static final int OFFLINE_MARK = 0xE05050;
 
     private void drawHistory(LiveCanvas c, int historyH, int foreground, float alpha) {
         List<LiveStore.Entry> thread = store.thread(peer);
