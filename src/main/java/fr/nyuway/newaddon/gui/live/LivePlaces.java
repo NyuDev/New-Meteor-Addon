@@ -52,7 +52,15 @@ public final class LivePlaces {
                 if (eq <= 0) continue;
 
                 String key = line.substring(0, eq).trim();
-                String[] parts = line.substring(eq + 1).split(",");
+                String value = line.substring(eq + 1);
+
+                // The folded-sections line is text, not geometry, and shares the file.
+                if (key.startsWith("$")) {
+                    FOLDS.put(key, value.trim());
+                    continue;
+                }
+
+                String[] parts = value.split(",");
                 if (key.isEmpty() || parts.length != 4) continue;
 
                 try {
@@ -77,6 +85,40 @@ public final class LivePlaces {
         return PLACES.get(key);
     }
 
+    /**
+     * Sections the user has folded shut, kept the same way and in the same file.
+     *
+     * <p>Folding a list away and finding it open again the next time the menu is opened is the
+     * menu forgetting what you told it. Stored as one line of names, since there are three of
+     * them and they are not going to become three hundred.
+     */
+    private static final String FOLDED = "$folded";
+
+    /** The section keys that were folded when the menu was last closed. */
+    public static java.util.Set<String> folded() {
+        ensureLoaded();
+        java.util.Set<String> out = new java.util.HashSet<>();
+        String line = FOLDS.get(FOLDED);
+        if (line == null || line.isBlank()) return out;
+
+        for (String key : line.split(",")) {
+            if (!key.isBlank()) out.add(key.trim());
+        }
+        return out;
+    }
+
+    public static void setFolded(java.util.Collection<String> keys) {
+        ensureLoaded();
+        String line = String.join(",", keys);
+        if (line.equals(FOLDS.get(FOLDED))) return;
+
+        FOLDS.put(FOLDED, line);
+        save();
+    }
+
+    /** Text entries kept alongside the geometry; one line each, same file. */
+    private static final Map<String, String> FOLDS = new LinkedHashMap<>();
+
     /** Remembers where a window was left, and writes it down. */
     public static void put(String key, int x, int y, int w, int h) {
         ensureLoaded();
@@ -98,6 +140,9 @@ public final class LivePlaces {
                 sb.append(e.getKey()).append('=')
                     .append(p[0]).append(',').append(p[1]).append(',')
                     .append(p[2]).append(',').append(p[3]).append('\n');
+            }
+            for (Map.Entry<String, String> e : FOLDS.entrySet()) {
+                sb.append(e.getKey()).append('=').append(e.getValue()).append('\n');
             }
             Files.writeString(f, sb.toString(), StandardCharsets.UTF_8);
         } catch (IOException e) {
