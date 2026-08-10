@@ -268,6 +268,15 @@ public class LiveMessage extends Module {
      * greeting sent "even when added outside this menu" actually requires.
      */
     private void syncFriends() {
+        // FriendBypass empties the list and fills it again. Every one of those returns looks
+        // like a new friend from here, and greeting fifty people in a tick is fifty whispers -
+        // which 2b2t answers by dropping the connection. The baseline is dropped instead, so
+        // the list that comes back is the list that was there.
+        if (FriendBypass.rearranging()) {
+            knownFriends = null;
+            return;
+        }
+
         java.util.Set<String> names = new java.util.HashSet<>();
         for (var friend : meteordevelopment.meteorclient.systems.friends.Friends.get()) {
             names.add(friend.getName());
@@ -596,6 +605,24 @@ public class LiveMessage extends Module {
         if (last != null) return last;
 
         return peer.toString().substring(0, 8);
+    }
+
+    /**
+     * Everyone actually loaded around us - in render distance, near enough to matter.
+     *
+     * <p>Read from the world's entities rather than the tab list, which is the difference: the
+     * tab list is everyone on the server, this is everyone you could walk up to. Asked fresh
+     * every time, because the whole point is that it changes as people arrive and leave.
+     */
+    public java.util.List<java.util.UUID> playersInRender() {
+        java.util.List<java.util.UUID> ids = new java.util.ArrayList<>();
+        if (mc.level == null) return ids;
+
+        for (var player : mc.level.players()) {
+            java.util.UUID id = player.getUUID();
+            if (mc.player == null || !id.equals(mc.player.getUUID())) ids.add(id);
+        }
+        return ids;
     }
 
     /** Everyone on the server right now, so the list can offer people never spoken to. */

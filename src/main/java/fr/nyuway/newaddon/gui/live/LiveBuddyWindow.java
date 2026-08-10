@@ -114,33 +114,44 @@ public class LiveBuddyWindow extends LiveWindow {
         String q = query.toString().trim().toLowerCase();
         boolean searching = !q.isEmpty();
 
-        // Recent stays in its last-activity timeline; the server list is sorted by name, resolved
+        // Recent stays in its last-activity timeline; the other two are sorted by name, resolved
         // once each rather than once per comparison.
         List<UUID> peers = store.peers();
+
+        // Loaded around us: near enough to walk up to, which is a different question from being
+        // on the server, and the one worth answering first. Read fresh every frame - the whole
+        // point is that it changes as people arrive and leave, and this list is rebuilt anyway.
+        List<UUID> inRender = module.playersInRender();
+        inRender.removeAll(peers);
+
         List<UUID> others = module.onlinePlayers();
         others.removeAll(peers);
+        others.removeAll(inRender);
 
         java.util.Map<UUID, String> names = new java.util.HashMap<>();
+        for (UUID p : inRender) names.put(p, module.displayName(p).toLowerCase());
         for (UUID p : others) names.put(p, module.displayName(p).toLowerCase());
+        inRender.sort(Comparator.comparing(names::get));
         others.sort(Comparator.comparing(names::get));
 
         if (searching) {
             peers.removeIf(p -> !matches(p, q));
+            inRender.removeIf(p -> !names.get(p).contains(q));
             others.removeIf(p -> !names.get(p).contains(q));
         }
 
-        if (!peers.isEmpty()) {
-            rows.add(new Row("Recent (" + peers.size() + ")", null, "recent"));
-            if (searching || !collapsed.contains("recent")) {
-                for (UUID peer : peers) rows.add(new Row(null, peer, null));
-            }
-        }
+        section(peers, "Recent (" + peers.size() + ")", "recent", searching);
+        section(inRender, "In render (" + inRender.size() + ")", "render", searching);
+        section(others, "On the server (" + others.size() + ")", "server", searching);
+    }
 
-        if (!others.isEmpty()) {
-            rows.add(new Row("On the server (" + others.size() + ")", null, "server"));
-            if (searching || !collapsed.contains("server")) {
-                for (UUID peer : others) rows.add(new Row(null, peer, null));
-            }
+    /** One folded-or-not block of rows, skipped entirely when there is nobody in it. */
+    private void section(List<UUID> members, String heading, String key, boolean searching) {
+        if (members.isEmpty()) return;
+
+        rows.add(new Row(heading, null, key));
+        if (searching || !collapsed.contains(key)) {
+            for (UUID peer : members) rows.add(new Row(null, peer, null));
         }
     }
 

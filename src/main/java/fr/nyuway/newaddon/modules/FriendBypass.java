@@ -80,10 +80,37 @@ public class FriendBypass extends Module {
             "Sets the friend list aside for a friendly fight, and puts it back after.");
     }
 
-    /** Whether a bypass is running, for FriendSync to know to stay quiet. */
+    /**
+     * Ticks the list still counts as being rearranged after the module switches off.
+     *
+     * <p>Every watcher of the friend list runs once a tick and compares against what it saw
+     * last. The restore happens between two of those looks, so without a window on this side of
+     * it the very next look sees fifty additions and does whatever it does about them - which
+     * for LiveMessage is fifty whispers, and on 2b2t that is a kick before the fiftieth is sent.
+     */
+    private static final long SETTLE_MS = 3000;
+
+    /** When the last restore finished, so the window above can be measured from it. */
+    private static long finishedAt;
+
+    /**
+     * Whether the friend list is being rearranged by this module rather than by the user.
+     *
+     * <p>Anything that reacts to the list changing should ask this and reset its baseline
+     * instead of acting. Not one flag per watcher: whoever adds the next one should not have to
+     * know this module exists to avoid being the thing that gets someone kicked.
+     */
+    public static boolean rearranging() {
+        FriendBypass module = Modules.get() == null ? null : Modules.get().get(FriendBypass.class);
+        if (module != null && module.isActive()) return true;
+        return System.currentTimeMillis() - finishedAt < SETTLE_MS;
+    }
+
+    /** Whether FriendSync in particular should stay quiet, which is also a setting of its own. */
     public static boolean silencingSync() {
         FriendBypass module = Modules.get() == null ? null : Modules.get().get(FriendBypass.class);
-        return module != null && module.isActive() && module.silenceSync.get();
+        if (module != null && module.isActive()) return module.silenceSync.get();
+        return rearranging();
     }
 
     @Override
@@ -121,6 +148,10 @@ public class FriendBypass extends Module {
             }
         }
         ourChange = false;
+
+        // Stamped after the work, so the quiet window is measured from the moment the list
+        // stopped moving rather than from the moment the module was switched off.
+        finishedAt = System.currentTimeMillis();
 
         if (announce.get()) info("Put %d friend(s) back.", back);
 
