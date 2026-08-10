@@ -107,6 +107,10 @@ public final class LiveStore {
         loaded.clear();
         lastActivity.clear();
 
+        // First, and before any early return below: a hidden list that only loads when a
+        // settings folder happens to exist is a hidden list that comes back on a fresh install.
+        loadHidden();
+
         Path dir = root.resolve("settings");
         if (!Files.isDirectory(dir)) return;
 
@@ -175,6 +179,84 @@ public final class LiveStore {
     /** How many conversations there are, without sorting them to find out. */
     public int peerCount() {
         return lastActivity.size();
+    }
+
+    /** When a conversation was last written to, or 0. Used to decide what has gone cold. */
+    public long lastActivity(UUID id) {
+        return lastActivity.getOrDefault(id, 0L);
+    }
+
+    /**
+     * Conversations taken off the list without being deleted.
+     *
+     * <p>Two different wishes: "I do not want to see this in my list" and "I want this gone".
+     * The first must not do the second - a conversation is the only record of what was said,
+     * and hiding one should never be a way to lose it by accident.
+     */
+    private final java.util.Set<UUID> hidden = new java.util.HashSet<>();
+
+    public boolean isHidden(UUID id) {
+        return hidden.contains(id);
+    }
+
+    public void hide(UUID id) {
+        if (hidden.add(id)) saveHidden();
+    }
+
+    public void unhide(UUID id) {
+        if (hidden.remove(id)) saveHidden();
+    }
+
+    /** Deletes a conversation and everything about it, from memory and from disk. */
+    public void forget(UUID id) {
+        peers.remove(id);
+        loaded.remove(id);
+        lastActivity.remove(id);
+        hidden.remove(id);
+
+        delete(messageFile(id));
+        delete(root.resolve("settings").resolve(id + ".json"));
+        saveHidden();
+    }
+
+    private void delete(Path file) {
+        try {
+            Files.deleteIfExists(file);
+        } catch (IOException e) {
+            NewAddon.LOG.warn("[livemessage] could not delete {}: {}", file, e.toString());
+        }
+    }
+
+    private void loadHidden() {
+        hidden.clear();
+        Path file = root.resolve("hidden.txt");
+        if (!Files.isRegularFile(file)) return;
+
+        try {
+            for (String line : Files.readAllLines(file, StandardCharsets.UTF_8)) {
+                String s = line.trim();
+                if (s.isEmpty()) continue;
+                try {
+                    hidden.add(UUID.fromString(s));
+                } catch (IllegalArgumentException ignored) {
+                    // A stray line; skip it and keep the rest.
+                }
+            }
+        } catch (IOException e) {
+            NewAddon.LOG.warn("[livemessage] could not read {}: {}", file, e.toString());
+        }
+    }
+
+    private void saveHidden() {
+        Path file = root.resolve("hidden.txt");
+        try {
+            Files.createDirectories(root);
+            StringBuilder sb = new StringBuilder();
+            for (UUID id : hidden) sb.append(id).append('\n');
+            Files.writeString(file, sb.toString(), StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            NewAddon.LOG.warn("[livemessage] could not write {}: {}", file, e.toString());
+        }
     }
 
     /** Messages from them not looked at yet. */

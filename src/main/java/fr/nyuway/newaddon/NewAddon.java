@@ -1,6 +1,7 @@
 package fr.nyuway.newaddon;
 
 import fr.nyuway.newaddon.commands.EnemyCommand;
+import fr.nyuway.newaddon.commands.TempFriendCommand;
 import fr.nyuway.newaddon.commands.VcCommand;
 import fr.nyuway.newaddon.modules.AutoMoss;
 import fr.nyuway.newaddon.modules.AutoStasisPull;
@@ -15,6 +16,7 @@ import fr.nyuway.newaddon.modules.ServerStats;
 import fr.nyuway.newaddon.modules.ShulkerOverview;
 import fr.nyuway.newaddon.modules.StasisProtection;
 import fr.nyuway.newaddon.modules.StasisPull;
+import fr.nyuway.newaddon.modules.TempFriends;
 import fr.nyuway.newaddon.utils.Enemies;
 import fr.nyuway.newaddon.utils.Relations;
 import meteordevelopment.meteorclient.addons.MeteorAddon;
@@ -56,6 +58,7 @@ public class NewAddon extends MeteorAddon {
         Modules.get().add(new LiveMessage());
         Modules.get().add(new FriendSync());
         Modules.get().add(new FriendBypass());
+        Modules.get().add(new TempFriends());
         Modules.get().add(new InvFix());
         Modules.get().add(new ChatProtect());
         Modules.get().add(new ServerStats());
@@ -63,6 +66,7 @@ public class NewAddon extends MeteorAddon {
 
         Commands.add(new EnemyCommand());
         Commands.add(new VcCommand());
+        Commands.add(new TempFriendCommand());
 
         // Both belong here rather than in a module. The colour has to be registered in the
         // window between Systems.init() and Systems.load() or it will not remember what it was

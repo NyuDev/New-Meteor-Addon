@@ -3,6 +3,7 @@ package fr.nyuway.newaddon.gui.live;
 import fr.nyuway.newaddon.modules.LiveMessage;
 import fr.nyuway.newaddon.modules.dm.LiveStore;
 import fr.nyuway.newaddon.modules.ServerStats;
+import fr.nyuway.newaddon.modules.TempFriends;
 import fr.nyuway.newaddon.utils.Enemies;
 import fr.nyuway.newaddon.utils.vc.VcTypes;
 
@@ -121,7 +122,12 @@ public class LiveChatWindow extends LiveWindow {
     /** The 2b2t.vc text: dimmer than a name, distinct from the grey of the UUID. */
     private static final int VC_INFO = 0x7FA6C4;
 
-    /** True while the panel opened by clicking the head is showing. */
+    /**
+     * True while the panel opened by clicking the head is showing.
+     *
+     * <p>Starts open when the list asked for a profile rather than a conversation. Taken rather
+     * than read, so it applies to this opening and not to every one after it.
+     */
     private boolean showingInfo;
 
     /** Meteor's friend colour, packed the way the icons want it. Asked for, never kept. */
@@ -167,6 +173,15 @@ public class LiveChatWindow extends LiveWindow {
     private static final Icon MUTE = (c, bx, by, bw, bh, color) -> {
         int ox = bx + (bw - 7) / 2, oy = by + (bh - 7) / 2;
         int[] rows = {0b0010000, 0b0110000, 0b1110101, 0b1110010, 0b1110101, 0b0110000, 0b0010000};
+        for (int r = 0; r < rows.length; r++)
+            for (int i = 0; i < 7; i++)
+                if ((rows[r] & (1 << (6 - i))) != 0) c.box(ox + i, oy + r, 1, 1, color);
+    };
+
+    /** An hourglass - a friend for now, which is a heart with an end to it. */
+    private static final Icon HOURGLASS = (c, bx, by, bw, bh, color) -> {
+        int ox = bx + (bw - 7) / 2, oy = by + (bh - 7) / 2;
+        int[] rows = {0b0111110, 0b1000001, 0b1001001, 0b1001111, 0b1000001, 0b1000001, 0b0111110};
         for (int r = 0; r < rows.length; r++)
             for (int i = 0; i < 7; i++)
                 if ((rows[r] & (1 << (6 - i))) != 0) c.box(ox + i, oy + r, 1, 1, color);
@@ -226,6 +241,7 @@ public class LiveChatWindow extends LiveWindow {
         this.w = 420;
         this.h = 260;
         restorePlace("chat:" + peer, screenWidth, screenHeight);
+        showingInfo = module.takeProfileRequest(peer);
 
         // Header toggles, left to right: friend, enemy, mute, ignore - each in its own colour
         // while on and white while off, each with a tooltip that names what a click would do
@@ -240,6 +256,14 @@ public class LiveChatWindow extends LiveWindow {
             () -> module.isEnemy(peer), Enemies::color,
             () -> module.isEnemy(peer) ? "Remove enemy" : "Add enemy",
             () -> module.toggleEnemy(peer)));
+
+        // A friend for now: the person you have just met and are about to do something with,
+        // who should not still be on the list next month.
+        buttons.add(new LiveButton(75, TITLEBAR + 4, 12, 12, true, HOURGLASS,
+            () -> TempFriends.isTemporary(module.displayName(peer)), 0xF2C94C,
+            () -> TempFriends.isTemporary(module.displayName(peer))
+                ? "Stop being a friend for now" : "Friend for now",
+            () -> module.toggleTempFriend(peer)));
         buttons.add(new LiveButton(30, TITLEBAR + 4, 12, 12, true, MUTE,
             () -> module.isMuted(peer), 0x8AB4F8,
             () -> module.isMuted(peer) ? "Unmute" : "Mute (keeps the messages, drops the notification)",

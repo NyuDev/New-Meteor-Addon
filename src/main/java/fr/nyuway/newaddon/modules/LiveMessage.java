@@ -85,6 +85,14 @@ public class LiveMessage extends Module {
         .defaultValue(true)
         .build());
 
+    private final Setting<Integer> coldAfterDays = sgGeneral.add(new IntSetting.Builder()
+        .name("cold-after-days")
+        .description("Days without a word before a conversation drops out of Recent into its " +
+                     "own section at the bottom. Someone who is on the server right now stays " +
+                     "in the sections about being here instead. Zero keeps everything in Recent.")
+        .defaultValue(14).min(0).max(365).sliderRange(0, 90)
+        .build());
+
     private final Setting<Integer> historyLimit = sgGeneral.add(new IntSetting.Builder()
         .name("history-limit")
         .description("Messages kept per conversation in memory. The file on disk keeps them all.")
@@ -464,6 +472,22 @@ public class LiveMessage extends Module {
         store.markRead(peer);
     }
 
+    /**
+     * Conversations whose window should come up showing the profile panel rather than the
+     * messages, because that is what was asked for. Cleared by the window as it reads it, so it
+     * is a request for the next open and not a state to get stuck in.
+     */
+    private final java.util.Set<java.util.UUID> showProfile = new java.util.HashSet<>();
+
+    public void showProfileNext(java.util.UUID peer) {
+        showProfile.add(peer);
+    }
+
+    /** Asked once by a window as it opens; true only for a window that was asked to show it. */
+    public boolean takeProfileRequest(java.util.UUID peer) {
+        return showProfile.remove(peer);
+    }
+
     /** Notes a window as open, so reopening the screen brings it back for the rest of the session. */
     public void markOpen(java.util.UUID peer) {
         open.add(peer);
@@ -509,6 +533,19 @@ public class LiveMessage extends Module {
 
         // Not greeted here: syncFriends() catches this add on the next tick along with any made
         // outside this window, so there is exactly one place a greeting is ever sent from.
+    }
+
+    /** Makes them a friend for now, or ends it. Their UUID goes on the entry when we have one. */
+    public void toggleTempFriend(java.util.UUID peer) {
+        String name = displayName(peer);
+
+        if (TempFriends.isTemporary(name)) {
+            TempFriends.remove(name);
+            info("%s is not a friend any more.", name);
+            return;
+        }
+
+        if (!TempFriends.add(name, peer)) info("%s is already a friend.", name);
     }
 
     public boolean isIgnored(java.util.UUID peer) {
@@ -633,6 +670,11 @@ public class LiveMessage extends Module {
             if (mc.player == null || !id.equals(mc.player.getUUID())) ids.add(id);
         }
         return ids;
+    }
+
+    /** How long without a word before a conversation counts as cold, in millis. 0 means never. */
+    public long coldAfterMillis() {
+        return coldAfterDays.get() * 86_400_000L;
     }
 
     /** How many are loaded around us, without building a list to count it. */
