@@ -140,6 +140,23 @@ public class TempFriends extends Module {
         return new ArrayList<>(TEMPS.keySet());
     }
 
+    /**
+     * Follows someone who has renamed, keeping the clock they were already on.
+     *
+     * <p>Without this the entry sits under a name nobody has, so it is never seen in render
+     * again, never expires, and the friendship it stands for outlives the session it was made
+     * for. Both timers carry over: renaming is not a reason to start the fifteen minutes again.
+     */
+    public static void rename(String before, String now) {
+        if (before == null || now == null) return;
+
+        Temp temp = TEMPS.remove(before.toLowerCase());
+        if (temp == null) return;
+
+        TEMPS.put(now.toLowerCase(), temp);
+        save();
+    }
+
     // --- expiry --------------------------------------------------------------
 
     @Override

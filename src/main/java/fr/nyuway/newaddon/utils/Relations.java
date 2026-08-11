@@ -1,10 +1,16 @@
 package fr.nyuway.newaddon.utils;
 
+import fr.nyuway.newaddon.NewAddon;
+import fr.nyuway.newaddon.modules.TempFriends;
 import meteordevelopment.meteorclient.MeteorClient;
 import meteordevelopment.meteorclient.events.world.TickEvent;
 import meteordevelopment.meteorclient.systems.friends.Friend;
 import meteordevelopment.meteorclient.systems.friends.Friends;
 import meteordevelopment.orbit.EventHandler;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.multiplayer.PlayerInfo;
+
+import java.util.UUID;
 
 /**
  * Keeps friend and enemy exclusive, including for friends added outside this addon.
@@ -48,5 +54,57 @@ public final class Relations {
             String name = friend.getName();
             if (Enemies.isEnemy(name)) Enemies.remove(name);
         }
+
+        renames();
+    }
+
+    /**
+     * Notices a friend who has changed their name, and writes the new one down.
+     *
+     * <p>Meteor keys a friend by UUID and copes with a rename on its own, but only when it
+     * happens to refresh that friend from Mojang, which is rare. Everything downstream is keyed
+     * by name - the enemy list, temporary friends, and above all the commands FriendSync sends
+     * to other clients, which have no UUID to fall back on. So a friend who renames quietly
+     * stops being a friend everywhere except in Meteor.
+     *
+     * <p>The tab list is the cheap way to see it: they are standing right there, under their new
+     * name, with the same UUID. No request to Mojang, no waiting - one map lookup per friend,
+     * once a second. Renaming the entry is all this does; FriendSync compares names each tick
+     * and will send the removal and the addition by itself, because from where it sits that is
+     * exactly what happened.
+     */
+    private void renames() {
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.getConnection() == null) return;
+
+        boolean changedFriends = false;
+
+        for (PlayerInfo info : mc.getConnection().getOnlinePlayers()) {
+            UUID id = Profiles.idOf(info.getProfile());
+            String now = Profiles.nameOf(info.getProfile());
+
+            String before = NameLedger.record(id, now);
+            if (before == null) continue;
+
+            NewAddon.LOG.info("[relations] {} is now {}", before, now);
+
+            // Meteor's own entry, renamed in place. Its friend list is a plain list searched by
+            // name, so changing the field is all there is to it - and FriendSync, which compares
+            // names each tick, will send the removal and the addition of its own accord, which
+            // from where it sits is exactly what happened.
+            Friend friend = Friends.get().get(before);
+            if (friend != null && Friends.get().get(now) == null) {
+                friend.name = now;
+                changedFriends = true;
+            }
+
+            // The other two lists are keyed by name as well, and a stale key in either is a
+            // relationship attached to a name nobody has any more.
+            if (Enemies.remove(before)) Enemies.add(now);
+            TempFriends.rename(before, now);
+        }
+
+        if (changedFriends) Friends.get().save();
+        NameLedger.flush();
     }
 }

@@ -195,6 +195,42 @@ public class ServerStats extends Module {
             VcTypes.PlayerStats.class, playerTtl());
     }
 
+    /** Recent entries shown in a profile. More than a handful is a wall, not a history. */
+    private static final int RECENT = 4;
+
+    /**
+     * The last few things that happened to them: who they killed, and who killed them.
+     *
+     * <p>Two cached requests, both of which the {@code .2b2t} command already makes, so a
+     * profile opened after one costs nothing. Empty while they are in flight - like everything
+     * else on that panel, it fills in a moment later rather than making the window wait.
+     */
+    public static java.util.List<String> recentEvents(UUID uuid, String name) {
+        if (name == null || name.isBlank() || !lookupsAllowed()) return java.util.List.of();
+
+        java.util.List<String> out = new java.util.ArrayList<>();
+
+        var kills = VcApi.cached("/kills",
+            VcApi.params("playerName", name, "pageSize", String.valueOf(RECENT)),
+            VcTypes.KillsResponse.class, playerTtl());
+        if (kills != null && kills.kills != null) {
+            for (var kill : kills.kills) {
+                if (kill.deathMessage != null) out.add(kill.deathMessage);
+            }
+        }
+
+        var deaths = VcApi.cached("/deaths",
+            VcApi.params("playerName", name, "pageSize", String.valueOf(RECENT)),
+            VcTypes.DeathsResponse.class, playerTtl());
+        if (deaths != null && deaths.deaths != null) {
+            for (var death : deaths.deaths) {
+                if (death.deathMessage != null) out.add(death.deathMessage);
+            }
+        }
+
+        return out;
+    }
+
     /** The same, by UUID, which does not go stale when someone renames. */
     public static VcTypes.PlayerStats statsFor(UUID uuid) {
         if (uuid == null || !lookupsAllowed()) return null;

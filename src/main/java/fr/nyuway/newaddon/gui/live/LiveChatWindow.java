@@ -5,6 +5,7 @@ import fr.nyuway.newaddon.modules.dm.LiveStore;
 import fr.nyuway.newaddon.modules.ServerStats;
 import fr.nyuway.newaddon.modules.TempFriends;
 import fr.nyuway.newaddon.utils.Enemies;
+import fr.nyuway.newaddon.utils.NameLedger;
 import fr.nyuway.newaddon.utils.vc.VcTypes;
 
 import java.text.SimpleDateFormat;
@@ -112,6 +113,58 @@ public class LiveChatWindow extends LiveWindow {
 
         c.text(Boolean.TRUE.equals(stats.prio) ? "Priority queue" : "No priority", px + 6, line,
             LiveCanvas.withAlpha(Boolean.TRUE.equals(stats.prio) ? 0x8AD98A : 0x9A9A9A, alpha));
+        line += 13;
+
+        line = drawPastNames(c, px + 6, line, pw - 12, alpha);
+        drawHistory(c, px + 6, line, pw - 12, py + ph - 4, alpha);
+    }
+
+    /**
+     * Who they used to be.
+     *
+     * <p>From our own ledger rather than an API: Mojang stopped publishing name history years
+     * ago, so the only record anyone has is the one they kept themselves. Nothing is shown for
+     * somebody who has only ever had one name, which is most people.
+     */
+    private int drawPastNames(LiveCanvas c, int px, int line, int width, float alpha) {
+        var past = NameLedger.previousNames(peer);
+        if (past.isEmpty()) return line;
+
+        String text = "Was  " + String.join(", ", past);
+        while (text.length() > 6 && c.width(text) > width) {
+            text = text.substring(0, text.length() - 2);
+        }
+
+        c.text(text, px, line, LiveCanvas.withAlpha(0xC9A227, alpha));
+        return line + 13;
+    }
+
+    /**
+     * What has happened to them lately, from 2b2t.vc: who they killed and who killed them.
+     *
+     * <p>Asked from the cache like everything else on this panel, so opening a profile never
+     * waits on the network - the lines simply appear a moment later. Both lists are already
+     * fetched by the {@code .2b2t} command, so a profile opened after one costs nothing at all.
+     */
+    private void drawHistory(LiveCanvas c, int px, int line, int width, int bottom, float alpha) {
+        if (!ServerStats.showInMessages()) return;
+
+        var events = ServerStats.recentEvents(peer, name());
+        if (events.isEmpty()) return;
+
+        c.text("Lately", px, line, LiveCanvas.withAlpha(INACTIVE, alpha));
+        line += 11;
+
+        for (String event : events) {
+            if (line + 10 > bottom) return;
+
+            String text = event;
+            while (text.length() > 4 && c.width(text) > width) {
+                text = text.substring(0, text.length() - 2);
+            }
+            c.text(text, px, line, LiveCanvas.withAlpha(0xA8A8A8, alpha));
+            line += 10;
+        }
     }
 
     /** Whether a click landed on the avatar block, which is what opens and closes the panel. */
