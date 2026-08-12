@@ -53,10 +53,11 @@ public class FriendBypass extends Module {
 
     private final Setting<Boolean> silenceSync = sgGeneral.add(new BoolSetting.Builder()
         .name("silence-sync")
-        .description("Stop FriendSync sending anything while the bypass is on. A bypass is a " +
-                     "local, temporary thing; the other client does not need fifty removals and " +
-                     "fifty additions for a fight it cannot see.")
-        .defaultValue(true)
+        .description("Keep the bypass to Meteor and tell no other client about it. Off, because " +
+                     "the other clients protect friends too - a bypass they are not told about " +
+                     "works in exactly one of the places it needs to. FriendSync paces what it " +
+                     "sends, so a list of fifty leaves steadily rather than all at once.")
+        .defaultValue(false)
         .build());
 
     private final Setting<Boolean> restoreOnDeath = sgGeneral.add(new BoolSetting.Builder()
@@ -106,11 +107,17 @@ public class FriendBypass extends Module {
         return System.currentTimeMillis() - finishedAt < SETTLE_MS;
     }
 
-    /** Whether FriendSync in particular should stay quiet, which is also a setting of its own. */
+    /**
+     * Whether FriendSync in particular should stay quiet.
+     *
+     * <p>Only when asked for. Note what this deliberately does not do: it does not stay true
+     * after the module switches off. {@link #rearranging} does, and LiveMessage uses it to avoid
+     * greeting fifty people at once - but FriendSync must see the restore, or the other clients
+     * would be told about the removals and never about the friends coming back.
+     */
     public static boolean silencingSync() {
         FriendBypass module = Modules.get() == null ? null : Modules.get().get(FriendBypass.class);
-        if (module != null && module.isActive()) return module.silenceSync.get();
-        return rearranging();
+        return module != null && module.isActive() && module.silenceSync.get();
     }
 
     @Override
