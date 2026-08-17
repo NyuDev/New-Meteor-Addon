@@ -110,6 +110,30 @@ public class StasisProtection extends Module {
         .visible(trustOwnPearl::get)
         .build());
 
+    private final Setting<Boolean> ignoreLag = sgDetection.add(new BoolSetting.Builder()
+        .name("ignore-lag")
+        .description("Do not treat the server catching up as a teleport. A rubber-band puts you " +
+                     "back somewhere you were a moment ago and follows a freeze; a stasis pull " +
+                     "puts you somewhere new.")
+        .defaultValue(true)
+        .build());
+
+    private final Setting<Double> lagRadius = sgDetection.add(new DoubleSetting.Builder()
+        .name("lag-radius")
+        .description("Landing this close to somewhere you were in the last five seconds counts " +
+                     "as the server correcting you rather than moving you.")
+        .defaultValue(8.0).min(1).max(64).sliderRange(2, 32)
+        .visible(ignoreLag::get)
+        .build());
+
+    private final Setting<Integer> lagGap = sgDetection.add(new IntSetting.Builder()
+        .name("lag-freeze")
+        .description("Milliseconds a single tick has to take before whatever position arrives " +
+                     "after it is read as catching up rather than as a teleport.")
+        .defaultValue(700).min(100).max(5000).sliderRange(200, 2000)
+        .visible(ignoreLag::get)
+        .build());
+
     private final Setting<Double> teleportDistance = sgDetection.add(new DoubleSetting.Builder()
         .name("teleport-distance")
         .description("How far you must move in a single tick to count as teleported. Well " +
@@ -180,6 +204,7 @@ public class StasisProtection extends Module {
         seeded = false;
         lastLevel = null;
         lastPlayer = null;
+        forgetPositions();
 
         if (reaction.get() == Reaction.Pull && !Modules.get().get(StasisPull.class).isConfigured()) {
             warning("StasisPull is not configured; an ambush would be detected but not answered.");
@@ -218,6 +243,13 @@ public class StasisProtection extends Module {
         if (mc.player == null || mc.level == null) return;
         ticks++;
 
+        // Measured every tick rather than only when something jumps: a gap read at the moment
+        // of a jump would be the time since the last jump, which is always enormous, and every
+        // pull would be waved through as lag.
+        long now = System.currentTimeMillis();
+        tickGap = lastTickAt == 0 ? 0 : now - lastTickAt;
+        lastTickAt = now;
+
         // A new world or a new player object means a dimension change, a death or a
         // reconnect. Position deltas across any of those are meaningless: a respawn moves you
         // to your bed and a portal moves you to another world, and neither is something
@@ -228,6 +260,7 @@ public class StasisProtection extends Module {
             seeded = false;
             // A death also settles any pearl that was still in the air.
             pearlGraceUntil = -1;
+            forgetPositions();
         }
 
         double x = mc.player.getX(), y = mc.player.getY(), z = mc.player.getZ();
@@ -242,8 +275,20 @@ public class StasisProtection extends Module {
         double movedSq = dx * dx + dy * dy + dz * dz;
         lastX = x; lastY = y; lastZ = z;
 
+        // Remembered before the jump is judged, so the ring holds where we were rather than
+        // where we were put.
         double threshold = teleportDistance.get();
-        if (movedSq >= threshold * threshold) onTeleported(Math.sqrt(movedSq));
+        boolean jumped = movedSq >= threshold * threshold;
+
+        if (jumped && lagged(x, y, z)) {
+            if (debug.get()) log("jump of %.0f blocks looks like the server catching up; ignored",
+                Math.sqrt(movedSq));
+            remember(x, y, z);
+            return;
+        }
+        remember(x, y, z);
+
+        if (jumped) onTeleported(Math.sqrt(movedSq));
 
         if (watchUntil != -1) {
             if (ticks > watchUntil) {
@@ -262,6 +307,72 @@ public class StasisProtection extends Module {
                 react("someone is here who is not a friend");
             }
         }
+    }
+
+    // --- telling a rubber-band from a pull ------------------------------------
+
+    /** Positions held, one per tick, covering the last few seconds. */
+    private static final int MEMORY = 100;
+    private final double[] pastX = new double[MEMORY];
+    private final double[] pastY = new double[MEMORY];
+    private final double[] pastZ = new double[MEMORY];
+    private int memoryAt;
+    private int memoryHeld;
+
+    /** Wall-clock time of the last tick, to notice the client or the server having frozen. */
+    private long lastTickAt;
+
+    /** How long the current tick took to arrive. Zero on the first one, which proves nothing. */
+    private long tickGap;
+
+    /** Drops every remembered position, for when they are about to stop meaning anything. */
+    private void forgetPositions() {
+        memoryAt = 0;
+        memoryHeld = 0;
+        lastTickAt = 0;
+        tickGap = 0;
+    }
+
+    private void remember(double x, double y, double z) {
+        pastX[memoryAt] = x;
+        pastY[memoryAt] = y;
+        pastZ[memoryAt] = z;
+        memoryAt = (memoryAt + 1) % MEMORY;
+        if (memoryHeld < MEMORY) memoryHeld++;
+    }
+
+    /**
+     * Whether a jump is the server catching up rather than somebody pulling you.
+     *
+     * <p>Two tells, and they answer different failures. A stasis chamber puts you somewhere you
+     * have never been; a rubber-band puts you back somewhere you were moments ago - so a landing
+     * within a few blocks of a position from the last five seconds is the server correcting you,
+     * not moving you.
+     *
+     * <p>And a freeze - the client stalling, or the server going quiet and sending a burst - is
+     * visible as a tick that took far longer than a tick. Whatever position arrives on the far
+     * side of one of those was not a teleport, it was arithmetic catching up.
+     *
+     * <p>Deliberately conservative in one direction: the cost of missing a lag spike is a
+     * needless look around, and the cost of dismissing a real pull is standing next to whoever
+     * fired it. Both tests have to be about the here and now for that reason.
+     */
+    private boolean lagged(double x, double y, double z) {
+        if (!ignoreLag.get()) return false;
+
+        // A tick that took most of a second means nothing was running. The first tick after a
+        // join has no previous one to measure from and must not count as a freeze.
+        if (tickGap > lagGap.get() && memoryHeld > 0) return true;
+
+        double near = lagRadius.get();
+        double nearSq = near * near;
+
+        for (int i = 0; i < memoryHeld; i++) {
+            double dx = x - pastX[i], dy = y - pastY[i], dz = z - pastZ[i];
+            if (dx * dx + dy * dy + dz * dz <= nearSq) return true;
+        }
+
+        return false;
     }
 
     private void onTeleported(double distance) {

@@ -545,7 +545,9 @@ public class LiveMessage extends Module {
             return;
         }
 
-        if (!TempFriends.add(name, peer)) info("%s is already a friend.", name);
+        // Silence here on purpose: TempFriends says why it refused, and saying it twice in two
+        // wordings reads as two different problems.
+        TempFriends.add(name, peer);
     }
 
     public boolean isIgnored(java.util.UUID peer) {

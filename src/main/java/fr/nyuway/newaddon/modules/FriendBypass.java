@@ -35,11 +35,11 @@ import java.util.UUID;
  * holding was removed by you. It costs a set comparison a tick and means the module can never
  * argue with the person using it.
  *
- * <h2>Other clients</h2>
- * A bypass is a local, temporary thing - the other client has no idea a fight is on, and telling
- * it to drop fifty friends and add them again is fifty commands into chat for nothing. So
- * {@link FriendSync} is told to hold its tongue while this is running, and the list it sees
- * afterwards is the list it saw before.
+ * <h2>Only the people who are here</h2>
+ * A friend list is years of people; a fight is the handful in front of you. Only friends who are
+ * actually on the server are set aside, because they are the only entries that change anything -
+ * and because every removal travels to the other clients and has to travel back afterwards.
+ * Someone who logs in while the bypass is on is caught on the next tick.
  */
 public class FriendBypass extends Module {
 
@@ -72,6 +72,15 @@ public class FriendBypass extends Module {
 
     /** The list as this module last left it, to tell its own doing from the user's. */
     private final Set<String> expected = new HashSet<>();
+
+    /**
+     * People the user friended while the bypass was on, and who are therefore left alone.
+     *
+     * <p>Needed because the sweep runs every tick. Without it, friending someone mid-fight would
+     * be undone on the very next tick by the same code that catches late arrivals: it looks for
+     * friends who are online, and that is exactly what they now are.
+     */
+    private final Set<String> spared = new HashSet<>();
 
     /** True while this module is the one changing the list, so the watcher ignores it. */
     private boolean ourChange;
@@ -124,20 +133,47 @@ public class FriendBypass extends Module {
     public void onActivate() {
         held.clear();
         expected.clear();
+        spared.clear();
+
+        int set = setAsideOnlineFriends();
+        snapshot();
+
+        if (announce.get()) {
+            info(set == 0 ? "Nobody on the friend list is here." : "Set aside " + set + " friend(s).");
+        }
+    }
+
+    /**
+     * Takes the friends who are actually here off the list, and only those.
+     *
+     * <p>A friend list is years of people; a fight is the handful standing in front of you.
+     * Removing all of them means every one of those removals travels to the other clients and
+     * every one has to travel back afterwards - minutes of chat about people who are not even
+     * on the server. The only entries that change anything are the ones for players who are
+     * here to be hit.
+     *
+     * <p>Run again every tick while the bypass is on, so somebody who logs in mid-fight is set
+     * aside as well rather than being protected for arriving late.
+     */
+    private int setAsideOnlineFriends() {
+        if (mc.getConnection() == null) return 0;
 
         Friends friends = Friends.get();
-        List<Friend> all = new ArrayList<>();
-        for (Friend friend : friends) all.add(friend);
+        List<Friend> here = new ArrayList<>();
+
+        for (Friend friend : friends) {
+            if (spared.contains(key(friend))) continue;
+            if (mc.getConnection().getPlayerInfo(friend.getName()) != null) here.add(friend);
+        }
 
         ourChange = true;
-        for (Friend friend : all) {
+        for (Friend friend : here) {
             held.put(key(friend), friend);
             friends.remove(friend);
         }
         ourChange = false;
 
-        if (announce.get()) info("Set aside %d friend(s) for the fight.", held.size());
-        if (held.isEmpty() && announce.get()) info("Nothing to set aside; the list was empty.");
+        return here.size();
     }
 
     @Override
@@ -164,6 +200,7 @@ public class FriendBypass extends Module {
 
         held.clear();
         expected.clear();
+        spared.clear();
     }
 
     @meteordevelopment.orbit.EventHandler
@@ -174,7 +211,23 @@ public class FriendBypass extends Module {
             return;
         }
 
+        // Order matters. Anything the user did to the list is read first, so a friend added
+        // between two ticks is recognised as theirs before the sweep below would take them
+        // straight back off for the crime of being online.
         watchForManualChanges();
+
+        // Somebody who logs in mid-fight is set aside too. Arriving late is not a reason to be
+        // the one person in the fight that nothing will touch.
+        int arrived = setAsideOnlineFriends();
+        if (arrived > 0 && announce.get()) info("Set aside %d who just arrived.", arrived);
+
+        snapshot();
+    }
+
+    /** Records the friend list as it now stands, which is the baseline for the next look. */
+    private void snapshot() {
+        expected.clear();
+        for (Friend friend : Friends.get()) expected.add(key(friend));
     }
 
     /**
@@ -186,7 +239,7 @@ public class FriendBypass extends Module {
      * held but has appeared some other way is the same case.
      */
     private void watchForManualChanges() {
-        if (ourChange || held.isEmpty()) return;
+        if (ourChange) return;
 
         Set<String> now = new HashSet<>();
         for (Friend friend : Friends.get()) now.add(key(friend));
@@ -194,12 +247,18 @@ public class FriendBypass extends Module {
         // Only ever compared against the last look, so the work is a set build a tick over a
         // list that is nearly always tiny during a bypass.
         if (now.equals(expected)) return;
-        expected.clear();
-        expected.addAll(now);
 
         for (String name : now) {
-            if (held.remove(name) != null && announce.get()) {
-                info("%s was friended during the bypass; leaving them a friend.", name);
+            // Present now, absent when this module last looked: nothing here adds to the list,
+            // so somebody else did - which is to say, the person playing.
+            if (expected.contains(name)) continue;
+
+            spared.add(name);
+            boolean wasHeld = held.remove(name) != null;
+            if (announce.get()) {
+                info(wasHeld
+                    ? "%s was friended during the bypass; leaving them a friend."
+                    : "%s was friended during the bypass; leaving them alone.", name);
             }
         }
     }

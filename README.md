@@ -63,20 +63,55 @@ which check is rejecting everything.
 
 ## StasisPull
 
-Asks a stasis bot to pull you home. Acts as a **button**: bind a key, press it, one request
-goes out and the module switches straight back off. Pulls are spaced 5s apart client-side.
+Asks a stasis bot to pull you home. Pulls are spaced 5s apart client-side.
 
 | Setting | Default | |
 | --- | --- | --- |
-| `mode` | Chat | `Chat`, `Whisper`, or `Http`. |
-| `notify` | on | Prints what was sent and what the bot answered. |
+| `behaviour` | Armed | `Armed` stays on and reads the per-bot keys; `Button` pulls once and switches off. |
+| `notify` | on | Says a pull was requested, and what the bot answered. |
+| `debug` | off | Writes the trigger word, bot name and endpoint to the log. |
+| `bots` | empty | One bot per line. Empty means the single bot in the settings below. |
+| `default-bot` | | Label of the bot everything automatic uses. Empty means the first. |
+| `key-1` .. `key-6` | none | A key per bot, in list order. Shown once the list has a bot for it. |
+| `mode` | Chat | `Chat`, `Whisper`, or `Http`. Single-bot setups only. |
 | `messages` | `!home` | Trigger words; one is picked at random per pull. |
 | `whisper-command` | `/msg` | Whisper command (`/msg`, `/w`, `/tell`). |
-| `bot-name` | | Account the whisper goes to. |
+| `bot-name` | | Account the whisper goes to. Single-bot setups only. |
 | `endpoint` | `http://localhost:6969` | Full URL of the bot's control server. |
 | `secret` | | Shared secret, identical to the bot's. Masked on screen. |
 
 The account pulled is always the one you are logged in as.
+
+### More than one bot
+
+A pearl is a place, and most people have several. Each line of `bots` is one of them:
+
+```
+home | http | http://nyuway.fr:6969 | thesecret
+base | whisper | Shasync
+spawn | chat
+```
+
+Label first, then how to reach it, then the account to whisper or the URL to call, then the
+secret for `http`. Everything after the label can be left out. The first six get `key-1`
+through `key-6`, in order; past that, or instead of it, Meteor macros can run the command:
+
+```
+.stasis list             # what is configured, and which one is the default
+.stasis pull base        # pull with a named bot
+.stasis default home     # change which one is the default
+```
+
+The **default** bot is the one used by everything that fires a pull on its own —
+StasisProtection's escape pull and AutoStasisPull — and by `Button` behaviour.
+
+Leave `bots` empty and nothing changes from before: the plain settings are read as a single
+bot, which is the whole configuration for anyone with one pearl.
+
+`Armed` is the default behaviour because the per-bot keys are read on the tick, and a module
+that is off has no ticks: the module being on *is* what makes the bots available. `Button` is
+the original behaviour — switching it on fires the default bot and switches it back off — and
+is still the right choice for one bot and one key.
 
 `Http` speaks [StasisBot](https://github.com/NyuDev/StasisBot)'s encrypted control channel:
 an AES-256-GCM sealed `HOMEREQ` frame POSTed to `/ctl`, with a 45s replay window. Nothing
@@ -146,6 +181,9 @@ Meteor friends list gets answered.
 | `danger-range` | 8 | How close a stranger must be to count as an ambush. |
 | `watch-seconds` | 2.5 | How long to keep watching after landing. |
 | `totem-trigger` | on | A totem pop during the watch window is an ambush by itself. |
+| `ignore-lag` | on | Do not treat a teleport that is the server catching up as a stasis pull. |
+| `lag-radius` | 8 | How close to somewhere you just were still counts as being put back. |
+| `lag-freeze` | 700ms | A gap this long since the last tick means the server stalled. |
 
 A few details worth knowing:
 
@@ -158,6 +196,12 @@ A few details worth knowing:
   still caught.
 - **A totem pop is trusted on its own**, without also needing a stranger detected nearby -
   whoever hit you hard enough to need it may be shooting from outside `danger-range`.
+- **Server lag is not an ambush.** A stalled server sends you back to where it last agreed you
+  were, which arrives as one large jump and looks exactly like a pull. Two things separate
+  them: the landing spot is somewhere you were standing within the last five seconds, and the
+  ticks stopped arriving just before it. Either one is enough to let it through, which is the
+  right way round - a missed rubber-band costs nothing, and a false ambush pulls you off
+  whatever you were doing and burns a pearl.
 
 - **It watches for a moment instead of deciding instantly.** The server sends your new
   position before the entities around it, so checking on the landing tick would usually see
@@ -326,6 +370,52 @@ Its colour sits with Meteor's own, in **Config → Visual → `enemy-color`**, r
 `friend-color`, and it is read fresh each frame: change the swatch and the names and the skull
 follow immediately. Enemies are coloured **in the tab list** too, the way Meteor colours friends
 — which is the one place you look before deciding whether to land.
+
+## FriendBypass
+
+KillAura, aim assists and everything else that respects friends will not touch one, which is
+right until the moment you have agreed to fight. This takes the friend list aside for the
+duration and puts it back after.
+
+| Setting | Default | |
+| --- | --- | --- |
+| `announce` | on | Say how many were set aside and how many came back. |
+| `silence-sync` | off | Keep the bypass to Meteor and tell no other client about it. |
+| `restore-on-death` | on | Switch off and put everyone back when you die. |
+
+**Only the friends who are actually on the server** are set aside, and anyone who logs in while
+it is on is caught on the next tick. A friend list is years of people; a fight is the handful in
+front of you, and they are the only entries that change anything.
+
+**What you do by hand wins.** The list is not frozen: friend someone during a bypass and they
+stay a friend afterwards, unfriend someone and they stay off. Only the people this module
+removed, and who have not been touched since, are put back.
+
+`silence-sync` is off because the other clients protect friends too — a bypass they are not
+told about works in exactly one of the places it needs to. FriendSync paces what it sends, so a
+list of fifty leaves steadily rather than all at once, which is the difference between a bypass
+and a kick for spam.
+
+## TempFriends
+
+Somebody you have just met and are about to do something with is a friend for the next hour,
+not the next year, but a friend list has only one kind of entry. `.tempfriend add <name>` (or
+the button in LiveMessage's right-click menu) makes one that expires.
+
+| Setting | Default | |
+| --- | --- | --- |
+| `forget-after` | 15 min | Minutes out of render before they are dropped. The clock restarts each time they are seen. |
+| `maximum-minutes` | 0 | Longest one lasts however often they are seen. 0 is no limit. |
+| `drop-on-leave` | on | Drop them all when you leave the server. |
+| `announce` | on | Say when one is added and when one runs out. |
+
+The list is written to `meteor-client/new-addon/temp-friends.txt` and read back at startup, so a
+crash cannot leave strangers on the friend list for ever. Adding someone permanently keeps them,
+and unfriending by hand ends it: anything you do yourself outranks the note kept here.
+
+The module has to be **on** to add one — the timers live in its tick handler, so a temporary
+friend added while it is off would be an ordinary friend under a name that says otherwise. Every
+refusal says why, in chat.
 
 ## ChatProtect
 

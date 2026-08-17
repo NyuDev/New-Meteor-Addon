@@ -1,6 +1,7 @@
 package fr.nyuway.newaddon;
 
 import fr.nyuway.newaddon.commands.EnemyCommand;
+import fr.nyuway.newaddon.commands.StasisCommand;
 import fr.nyuway.newaddon.commands.TempFriendCommand;
 import fr.nyuway.newaddon.commands.VcCommand;
 import fr.nyuway.newaddon.modules.AutoMoss;
@@ -67,6 +68,7 @@ public class NewAddon extends MeteorAddon {
         Commands.add(new EnemyCommand());
         Commands.add(new VcCommand());
         Commands.add(new TempFriendCommand());
+        Commands.add(new StasisCommand());
 
         // Both belong here rather than in a module. The colour has to be registered in the
         // window between Systems.init() and Systems.load() or it will not remember what it was

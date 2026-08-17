@@ -32,9 +32,10 @@ public class TempFriendCommand extends Command {
     //?}
         builder.then(literal("add")
             .then(argument("name", StringArgumentType.word()).executes(ctx -> {
+                // Nothing said on failure: TempFriends prints why it refused, and a second
+                // sentence guessing at a different reason is how a clear message becomes noise.
                 String name = StringArgumentType.getString(ctx, "name");
-                if (TempFriends.add(name, uuidOf(name))) info("%s is a friend for now.", name);
-                else info("%s is already a friend.", name);
+                TempFriends.add(name, uuidOf(name));
                 return OK;
             })));
 

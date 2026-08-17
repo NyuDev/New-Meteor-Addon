@@ -108,21 +108,45 @@ public class TempFriends extends Module {
      *         surprise nobody asked for
      */
     public static boolean add(String name, UUID id) {
+        TempFriends module = get();
+
+        // Refused outright while the module is off. Nothing would ever expire it - the timers
+        // live in a tick handler Meteor only runs for an active module - so what you would get
+        // is an ordinary friend under a name that says otherwise, which is worse than a no.
+        if (module == null || !module.isActive()) {
+            say(module, "Switch temp-friends on first; nothing would ever un-friend them.");
+            return false;
+        }
+
         if (name == null || name.isBlank()) return false;
 
         Friends friends = Friends.get();
-        if (friends.get(name) != null && !isTemporary(name)) return false;
+        if (friends.get(name) != null && !isTemporary(name)) {
+            say(module, name + " is already a friend for good; leaving it that way.");
+            return false;
+        }
 
         long now = System.currentTimeMillis();
         TEMPS.put(name.toLowerCase(), new Temp(now, now));
-        if (friends.get(name) == null) friends.add(new Friend(name, id));
-        save();
 
-        TempFriends module = get();
-        if (module != null && module.announce.get()) {
-            module.info("%s is a friend for now.", name);
+        // Meteor refuses a name it already holds and a name with a space in it, and says so by
+        // returning false. Worth knowing about: silence here was indistinguishable from a dead
+        // button, which is exactly what it looked like.
+        if (friends.get(name) == null && !friends.add(new Friend(name, id))) {
+            TEMPS.remove(name.toLowerCase());
+            say(module, "Meteor would not add " + name + " to the friend list.");
+            return false;
         }
+
+        save();
+        if (module.announce.get()) module.info("%s is a friend for now.", name);
         return true;
+    }
+
+    /** Says why nothing happened. A button that does nothing without a word reads as broken. */
+    private static void say(TempFriends module, String why) {
+        if (module != null) module.warning(why);
+        else NewAddon.LOG.warn("[temp-friends] {}", why);
     }
 
     /** Ends it, taking them off the friend list with it. */
