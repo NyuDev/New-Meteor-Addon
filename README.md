@@ -239,9 +239,18 @@ name does not merge two people.
 Each row is the person's head, ringed green while they are on the server and grey while they
 are not - offline players wear their default skin rather than vanishing - beside a name coloured
 by relationship: white for a stranger, Meteor's `friend-color` for a friend, `enemy-color` for an
-enemy, red for someone ignored. The buddy list folds into two sections, Recent and who else is on
-the server, ordered so the people you can reach sit at the top: online friends, online strangers,
-then the same two offline. A conversation carries a heart to friend them, a skull to make them an
+enemy, red for someone ignored.
+
+The buddy list folds into four sections: **In render**, **Recent**, **On the server**, and
+**Not seen in a while**. Nobody is listed twice, so they are filled in that order — whichever
+fact about a person matters most decides where they sit. Being within reach comes first:
+somebody standing next to you is under In render even if you were talking to them this morning,
+because that section is what the list is glanced at for, and a person who is right there listed
+under Recent is the right answer in the wrong place. Recent then beats the rest of the server,
+because a conversation you have had beats a name you have never spoken to. Every section keeps
+its unread badge, and each remembers whether you folded it shut.
+
+A conversation carries a heart to friend them, a skull to make them an
 enemy, a speaker to mute and a barred circle to ignore, each lit while its toggle is on.
 
 A whisper that lands with the window closed slides an advancement-style toast in from the
