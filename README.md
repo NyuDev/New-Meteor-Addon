@@ -73,45 +73,75 @@ Asks a stasis bot to pull you home. Pulls are spaced 5s apart client-side.
 | `bots` | empty | One bot per line. Empty means the single bot in the settings below. |
 | `default-bot` | | Label of the bot everything automatic uses. Empty means the first. |
 | `key-1` .. `key-6` | none | A key per bot, in list order. Shown once the list has a bot for it. |
-| `mode` | Chat | `Chat`, `Whisper`, or `Http`. Single-bot setups only. |
-| `messages` | `!home` | Trigger words; one is picked at random per pull. |
-| `whisper-command` | `/msg` | Whisper command (`/msg`, `/w`, `/tell`). |
-| `bot-name` | | Account the whisper goes to. Single-bot setups only. |
-| `endpoint` | `http://localhost:6969` | Full URL of the bot's control server. |
-| `secret` | | Shared secret, identical to the bot's. Masked on screen. |
+| `mode` | Chat | Mode for a bot that does not say: `Chat`, `Whisper`, or `Http`. |
+| `messages` | `!home` | Trigger words for a bot with no `say=` of its own. |
+| `whisper-command` | `/msg` | Whisper command for a bot with no `cmd=` (`/msg`, `/w`, `/tell`). |
+| `bot-name` | | Account a whisper goes to, for a bot with no `to=`. |
+| `endpoint` | `http://localhost:6969` | Control server for a bot with no `url=`. |
+| `secret` | | Shared secret for a bot with no `secret=`. Masked on screen. |
 
 The account pulled is always the one you are logged in as.
 
-### More than one bot
+### A bot is a whole configuration
 
-A pearl is a place, and most people have several. Each line of `bots` is one of them:
-
-```
-home | http | http://nyuway.fr:6969 | thesecret
-base | whisper | Shasync
-spawn | chat
-```
-
-Label first, then how to reach it, then the account to whisper or the URL to call, then the
-secret for `http`. Everything after the label can be left out. The first six get `key-1`
-through `key-6`, in order; past that, or instead of it, Meteor macros can run the command:
+A pearl is a place, and most people have several — and they are not the same bot with a
+different address. One might be a StasisBot on a box you own, answering an encrypted HTTP
+frame; the next a spare account you whisper. So each line of `bots` carries the lot:
 
 ```
-.stasis list             # what is configured, and which one is the default
-.stasis pull base        # pull with a named bot
-.stasis default home     # change which one is the default
+home; mode=http; url=http://nyuway.fr:6969; secret=hunter2
+base; mode=whisper; to=Shasync; say=!home
+spawn; mode=chat; say=!spawn, !tp
 ```
+
+Label first, then named fields in any order:
+
+| Field | Aliases | |
+| --- | --- | --- |
+| `mode` | | `chat`, `whisper`, or `http`. |
+| `say` | `msg`, `message`, `messages` | Trigger words, comma separated. One is picked at random per pull. |
+| `to` | `bot`, `name` | The account a whisper goes to. |
+| `cmd` | `command` | Whisper command, for a server that does not use `/msg`. |
+| `url` | `endpoint`, `host` | The HTTP control server. |
+| `secret` | `key`, `password` | Shared secret. `http` only. |
+
+**Anything a line leaves out comes from the settings above**, which is why `spawn; mode=chat`
+is a legal bot — and why an empty `bots` list is still a working single-bot setup, exactly as
+it was before the list existed. Two bots on the same server with the same secret only need to
+say what differs.
+
+Nothing has to be typed in that format, though. The commands write it for you:
+
+```
+.stasis add home http                      # create a bot
+.stasis set home url http://nyuway.fr:6969
+.stasis set home secret hunter2
+.stasis set base say !home, !tp            # several trigger words
+.stasis show home                          # what it resolves to, secret withheld
+.stasis list                               # all of them, and what any of them is missing
+.stasis default home                       # which one everything automatic uses
+.stasis pull base                          # fire a named one
+.stasis remove spawn
+```
+
+`add` and `set` write the config out immediately rather than waiting for the game to close
+tidily. `show` and `list` print what a bot *resolves to*, defaults filled in, because that is
+the question you are asking when a pull did not arrive.
+
+The first six bots get `key-1` through `key-6`, in list order, shown in the settings panel
+once the list has a bot for them. Past six, a Meteor macro on `.stasis pull <label>` binds any
+key to any bot.
 
 The **default** bot is the one used by everything that fires a pull on its own —
 StasisProtection's escape pull and AutoStasisPull — and by `Button` behaviour.
-
-Leave `bots` empty and nothing changes from before: the plain settings are read as a single
-bot, which is the whole configuration for anyone with one pearl.
 
 `Armed` is the default behaviour because the per-bot keys are read on the tick, and a module
 that is off has no ticks: the module being on *is* what makes the bots available. `Button` is
 the original behaviour — switching it on fires the default bot and switches it back off — and
 is still the right choice for one bot and one key.
+
+The older positional form, `label | mode | target | secret`, is still read, so a config
+written against the first version of the list keeps working.
 
 `Http` speaks [StasisBot](https://github.com/NyuDev/StasisBot)'s encrypted control channel:
 an AES-256-GCM sealed `HOMEREQ` frame POSTed to `/ctl`, with a 45s replay window. Nothing
