@@ -211,9 +211,9 @@ public class AutoStasisPull extends Module {
             }
         }
 
-        if (!Modules.get().get(StasisPull.class).isConfigured()) {
-            warning("StasisPull has no trigger words or endpoint set; a pull would do nothing.");
-        }
+        StasisPull pull = Modules.get().get(StasisPull.class);
+        if (!pull.isActive()) warning("stasis-pull is off; a pull would do nothing.");
+        else if (!pull.isConfigured()) warning("The default stasis bot is not configured.");
     }
 
     @EventHandler

@@ -206,8 +206,16 @@ public class StasisProtection extends Module {
         lastPlayer = null;
         forgetPositions();
 
-        if (reaction.get() == Reaction.Pull && !Modules.get().get(StasisPull.class).isConfigured()) {
-            warning("StasisPull is not configured; an ambush would be detected but not answered.");
+        if (reaction.get() == Reaction.Pull) {
+            StasisPull pull = Modules.get().get(StasisPull.class);
+            // Two separate ways for the answer to go nowhere, and a message that named only one
+            // of them would send you looking in the wrong place.
+            if (!pull.isActive()) {
+                warning("stasis-pull is off; an ambush would be detected but not answered.");
+            } else if (!pull.isConfigured()) {
+                warning("The default stasis bot is not configured; an ambush would be detected " +
+                        "but not answered.");
+            }
         }
         if (!consentKey.get().isSet()) {
             warning("No consent key bound - every teleport will be judged on who is nearby.");

@@ -5,8 +5,14 @@ import fr.nyuway.newaddon.compat.StasisControl;
 import fr.nyuway.newaddon.gui.PasswordRenderer;
 import fr.nyuway.newaddon.utils.StasisBots;
 import meteordevelopment.meteorclient.events.world.TickEvent;
+import meteordevelopment.meteorclient.gui.GuiTheme;
+import meteordevelopment.meteorclient.gui.widgets.WWidget;
+import meteordevelopment.meteorclient.gui.widgets.containers.WTable;
+import meteordevelopment.meteorclient.gui.widgets.pressable.WButton;
 import meteordevelopment.meteorclient.settings.BoolSetting;
 import meteordevelopment.meteorclient.settings.EnumSetting;
+import meteordevelopment.meteorclient.settings.IVisible;
+import meteordevelopment.meteorclient.settings.IntSetting;
 import meteordevelopment.meteorclient.settings.KeybindSetting;
 import meteordevelopment.meteorclient.settings.Setting;
 import meteordevelopment.meteorclient.settings.SettingGroup;
@@ -24,9 +30,22 @@ import java.util.List;
 import java.util.concurrent.ThreadLocalRandom;
 
 /**
- * StasisPull - asks a stasis bot to pull you home, however you like to ask.
+ * StasisPull - asks a stasis bot to pull you home.
  *
- * <p>Three ways to ask, because they suit different setups:
+ * <h2>One section per bot</h2>
+ * A pearl is a place, and most people have several: home, the base, the stash three thousand
+ * blocks out. They are not one bot with several addresses either - one might be a StasisBot on a
+ * box you own answering an encrypted HTTP frame, and the next a spare account you whisper. So a
+ * bot is configured whole, in its own section: a name, a key, whether it is the default one, how
+ * to reach it, and then whatever that way of reaching it needs.
+ *
+ * <p>The number of sections follows the {@code bots} slider, which is what "add a bot" is here.
+ * Meteor has no repeatable settings group, but it does drop a section whose settings are all
+ * hidden - so the sections all exist and the ones past the count are simply not drawn. Real
+ * controls either way: a keybind widget for the key, a checkbox for the default, a masked box
+ * for the secret.
+ *
+ * <h2>Three ways to ask</h2>
  * <ul>
  *   <li>{@code Chat} - say a trigger word in public chat. Works with any bot that watches
  *       chat, but everyone sees it.</li>
@@ -36,37 +55,13 @@ import java.util.concurrent.ThreadLocalRandom;
  *       server at all, so there is nothing to see, log, or rate-limit.</li>
  * </ul>
  *
- * <h2>A bot is a whole configuration</h2>
- * A pearl is a place, and anyone who has played long enough has several: home, the base, the
- * stash three thousand blocks out. They are not the same bot with a different address, either -
- * one might be a StasisBot on a box you own, answering an encrypted HTTP frame, and the next a
- * spare account you whisper. So each line of {@code bots} carries the lot: its mode, its own
- * trigger words, its own whisper command, its own endpoint and secret.
- *
- * <pre>
- * home; mode=http; url=http://nyuway.fr:6969; secret=hunter2
- * base; mode=whisper; to=Shasync; say=!home
- * spawn; mode=chat; say=!spawn
- * </pre>
- *
- * <p>The settings underneath the list are the <em>defaults</em>: anything a line does not say
- * is taken from them. That is what lets {@code spawn; mode=chat} be a legal bot, and it is also
- * the entire configuration when the list is empty, which is every setup with one pearl.
- *
- * <p>One of them is the default bot, and that is what everything automatic uses - the escape
- * pull {@link StasisProtection} fires when an ambush starts, and {@link AutoStasisPull} when you
- * are about to die.
- *
- * <h2>Armed, or a button</h2>
- * The module has always been a button: switch it on, one request goes out, it switches itself
- * back off. That works for exactly one bot, because a module has exactly one keybind. So it now
- * has two behaviours - {@code Armed}, where the module stays on and each bot in the list has its
- * own key, and {@code Button}, the old way. Armed is the default, and is what "the bots are
- * available while the module is on" means: the keys are read on the tick, and a module that is
- * off has no ticks.
- *
  * <p>Several trigger words can be listed per bot and one is picked at random per pull, which is
  * how StasisBot itself suggests dodging server anti-spam on repeated identical lines.
+ *
+ * <h2>Off means off</h2>
+ * Nothing can ask a bot for anything while this module is switched off - not the keys, not the
+ * button, not {@link StasisProtection}'s escape pull, not {@link AutoStasisPull}. One switch, and
+ * it is the module's own, rather than a set of things that each have to be remembered separately.
  */
 public class StasisPull extends Module {
 
@@ -76,28 +71,16 @@ public class StasisPull extends Module {
      */
     private static final long COOLDOWN_MS = 5_000L;
 
-    /** How many bots can have a key of their own. Past this, use a macro on {@code .stasis}. */
-    private static final int KEY_SLOTS = 6;
-
-    /** What switching the module on does. */
-    public enum Behaviour {
-        /** Stays on, and each bot in the list answers to its own key. */
-        Armed,
-        /** Pulls with the default bot straight away, then switches off. The original way. */
-        Button
-    }
+    /** How many bots can be configured. Sections past the count are not drawn. */
+    private static final int MAX_BOTS = 8;
 
     private final SettingGroup sgGeneral = settings.getDefaultGroup();
-    private final SettingGroup sgBots = settings.createGroup("Bots");
-    private final SettingGroup sgKeys = settings.createGroup("Keys");
-    private final SettingGroup sgDefaults = settings.createGroup("Defaults");
-    private final SettingGroup sgHttp = settings.createGroup("HTTP defaults");
 
-    private final Setting<Behaviour> behaviour = sgGeneral.add(new EnumSetting.Builder<Behaviour>()
-        .name("behaviour")
-        .description("Armed keeps the module on so the per-bot keys work. Button pulls with the " +
-                     "default bot the moment it is switched on, then switches off again.")
-        .defaultValue(Behaviour.Armed)
+    private final Setting<Integer> count = sgGeneral.add(new IntSetting.Builder()
+        .name("bots")
+        .description("How many bots you have. Raising this adds a section below to configure " +
+                     "the new one in.")
+        .defaultValue(1).min(1).max(MAX_BOTS).sliderRange(1, MAX_BOTS)
         .build());
 
     private final Setting<Boolean> notify = sgGeneral.add(new BoolSetting.Builder()
@@ -114,220 +97,316 @@ public class StasisPull extends Module {
         .defaultValue(false)
         .build());
 
-    private final Setting<List<String>> bots = sgBots.add(new StringListSetting.Builder()
-        .name("bots")
-        .description("One bot per line, each with its own configuration: " +
-                     "label; mode=http; url=...; secret=... - or mode=whisper with to= and say=, " +
-                     "or mode=chat with say=. Anything a line leaves out comes from the defaults " +
-                     "below. Empty list means the defaults are the one bot. Easier from chat: " +
-                     ".stasis add, .stasis set. Note that a secret typed here is shown in full.")
-        .defaultValue(List.of())
+    // --- what an older version wrote, read once and thrown away ---------------
+
+    private final Setting<Boolean> migrated = sgGeneral.add(new BoolSetting.Builder()
+        .name("migrated")
+        .description("Whether the bots from an older version have been read in already.")
+        .defaultValue(false)
+        .visible(() -> false)
         .build());
 
-    private final Setting<String> defaultBot = sgBots.add(new StringSetting.Builder()
-        .name("default-bot")
-        .description("Label of the bot used when nothing says otherwise - the module's own key, " +
-                     "and every automatic pull. Empty means the first one in the list.")
-        .defaultValue("")
-        .visible(() -> !bots.get().isEmpty())
-        .build());
+    private final SettingGroup sgOldList = settings.createGroup("Bots");
+    private final SettingGroup sgOldDefaults = settings.createGroup("Defaults");
+    private final SettingGroup sgOldHttp = settings.createGroup("HTTP defaults");
 
-    /** One per bot, in list order. Slot N belongs to the Nth line of {@code bots}. */
-    private final List<Setting<Keybind>> keys = new ArrayList<>();
+    private final Setting<List<String>> oldBots = sgOldList.add(new StringListSetting.Builder()
+        .name("bots").description("").defaultValue(List.of()).visible(() -> false).build());
 
-    private final Setting<StasisBots.Mode> mode = sgDefaults.add(new EnumSetting.Builder<StasisBots.Mode>()
-        .name("mode")
-        .description("How to ask a bot that does not say. Http goes straight to StasisBot and " +
-                     "never touches the game server.")
-        .defaultValue(StasisBots.Mode.Chat)
-        .build());
+    private final Setting<StasisBots.Mode> oldMode = sgOldDefaults.add(new EnumSetting.Builder<StasisBots.Mode>()
+        .name("mode").description("").defaultValue(StasisBots.Mode.Chat).visible(() -> false).build());
 
-    private final Setting<List<String>> messages = sgDefaults.add(new StringListSetting.Builder()
-        .name("messages")
-        .description("Trigger words for a bot with no say= of its own. One is picked at random " +
-                     "per pull, which keeps repeated pulls from looking like spam.")
-        .defaultValue(List.of("!home"))
-        .build());
+    private final Setting<List<String>> oldMessages = sgOldDefaults.add(new StringListSetting.Builder()
+        .name("messages").description("").defaultValue(List.of("!home")).visible(() -> false).build());
 
-    private final Setting<String> whisperCommand = sgDefaults.add(new StringSetting.Builder()
-        .name("whisper-command")
-        .description("Command used to whisper, for a bot with no cmd= of its own. Servers vary: " +
-                     "/msg, /w, /tell.")
-        .defaultValue("/msg")
-        .build());
+    private final Setting<String> oldCommand = sgOldDefaults.add(new StringSetting.Builder()
+        .name("whisper-command").description("").defaultValue("/msg").visible(() -> false).build());
 
-    private final Setting<String> botName = sgDefaults.add(new StringSetting.Builder()
-        .name("bot-name")
-        .description("Account a whisper goes to, for a bot with no to= of its own.")
-        .defaultValue("")
-        .visible(() -> !bots.get().isEmpty() || mode.get() == StasisBots.Mode.Whisper)
-        .build());
+    private final Setting<String> oldAccount = sgOldDefaults.add(new StringSetting.Builder()
+        .name("bot-name").description("").defaultValue("").visible(() -> false).build());
 
-    private final Setting<String> endpoint = sgHttp.add(new StringSetting.Builder()
-        .name("endpoint")
-        .description("Control server for a bot with no url= of its own. Full URL, protocol and all.")
-        .defaultValue("http://localhost:6969")
-        .visible(() -> !bots.get().isEmpty() || mode.get() == StasisBots.Mode.Http)
-        .wide()
-        .build());
+    private final Setting<String> oldEndpoint = sgOldHttp.add(new StringSetting.Builder()
+        .name("endpoint").description("").defaultValue("http://localhost:6969").visible(() -> false).build());
 
-    private final Setting<String> secret = sgHttp.add(new StringSetting.Builder()
-        .name("secret")
-        .description("Shared secret for a bot with no secret= of its own, identical to the " +
-                     "bot's. Hidden on screen, but Meteor still stores it in plain text in its " +
-                     "config like any other setting.")
-        .defaultValue("")
-        .visible(() -> !bots.get().isEmpty() || mode.get() == StasisBots.Mode.Http)
-        .renderer(PasswordRenderer.class)
-        .wide()
-        .build());
+    private final Setting<String> oldSecret = sgOldHttp.add(new StringSetting.Builder()
+        .name("secret").description("").defaultValue("").visible(() -> false).build());
 
-    private boolean fired;
+    // --- the bots ------------------------------------------------------------
+
+    /** One bot: its own section, and everything it needs in it. */
+    private final class Slot {
+
+        private final int index;
+
+        private final Setting<String> name;
+        private final Setting<Boolean> preferred;
+        private final Setting<Keybind> key;
+        private final Setting<StasisBots.Mode> mode;
+        private final Setting<List<String>> messages;
+        private final Setting<String> command;
+        private final Setting<String> account;
+        private final Setting<String> endpoint;
+        private final Setting<String> secret;
+
+        /** Last state of this bot's key, so a held key pulls once rather than every tick. */
+        private boolean held;
+
+        private Slot(int index) {
+            this.index = index;
+
+            // Only the first section starts open. Eight expanded sections is a wall, and the
+            // one you are configuring is the one you just added.
+            SettingGroup sg = settings.createGroup("Bot " + (index + 1), index == 0);
+            IVisible exists = () -> index < count.get();
+
+            name = sg.add(new StringSetting.Builder()
+                .name("name")
+                .description("What to call this bot. Used by .stasis and on its button.")
+                .defaultValue("bot-" + (index + 1))
+                .visible(exists)
+                .build());
+
+            preferred = sg.add(new BoolSetting.Builder()
+                .name("default")
+                .description("Use this one when nothing says otherwise - the escape pull " +
+                             "StasisProtection fires, and AutoStasisPull. Ticking it unticks " +
+                             "the others: there is only one default.")
+                .defaultValue(index == 0)
+                .onChanged(on -> { if (on) keepOnlyDefault(index); })
+                .visible(exists)
+                .build());
+
+            key = sg.add(new KeybindSetting.Builder()
+                .name("key")
+                .description("Pulls with this bot. Read only while the module is on.")
+                .defaultValue(Keybind.none())
+                .visible(exists)
+                .build());
+
+            mode = sg.add(new EnumSetting.Builder<StasisBots.Mode>()
+                .name("mode")
+                .description("How to reach this bot. Http goes straight to StasisBot and never " +
+                             "touches the game server.")
+                .defaultValue(StasisBots.Mode.Chat)
+                .visible(exists)
+                .build());
+
+            messages = sg.add(new StringListSetting.Builder()
+                .name("messages")
+                .description("Trigger words this bot listens for. One is picked at random per " +
+                             "pull, which keeps repeated pulls from looking like spam.")
+                .defaultValue(List.of("!home"))
+                .visible(() -> exists.isVisible() && mode.get() != StasisBots.Mode.Http)
+                .build());
+
+            command = sg.add(new StringSetting.Builder()
+                .name("whisper-command")
+                .description("Command used to whisper. Servers vary: /msg, /w, /tell.")
+                .defaultValue("/msg")
+                .visible(() -> exists.isVisible() && mode.get() == StasisBots.Mode.Whisper)
+                .build());
+
+            account = sg.add(new StringSetting.Builder()
+                .name("bot-name")
+                .description("Account the whisper goes to.")
+                .defaultValue("")
+                .visible(() -> exists.isVisible() && mode.get() == StasisBots.Mode.Whisper)
+                .build());
+
+            endpoint = sg.add(new StringSetting.Builder()
+                .name("endpoint")
+                .description("Full URL of this bot's control server, including the protocol.")
+                .defaultValue("http://localhost:6969")
+                .visible(() -> exists.isVisible() && mode.get() == StasisBots.Mode.Http)
+                .wide()
+                .build());
+
+            secret = sg.add(new StringSetting.Builder()
+                .name("secret")
+                .description("Shared secret, identical to this bot's. Hidden on screen, but " +
+                             "Meteor still stores it in plain text in its config like any " +
+                             "other setting.")
+                .defaultValue("")
+                .visible(() -> exists.isVisible() && mode.get() == StasisBots.Mode.Http)
+                .renderer(PasswordRenderer.class)
+                .wide()
+                .build());
+        }
+
+        /** What to call it. Never blank, so there is always something to type at {@code .stasis}. */
+        private String label() {
+            String written = name.get().trim();
+            return written.isEmpty() ? "bot-" + (index + 1) : written;
+        }
+
+        /** What this bot is missing before it could send anything, or null when it is fine. */
+        private String missing() {
+            return switch (mode.get()) {
+                case Chat -> messages.get().isEmpty() ? "a trigger word" : null;
+                case Whisper -> {
+                    if (account.get().isBlank()) yield "a bot name to whisper";
+                    yield messages.get().isEmpty() ? "a trigger word" : null;
+                }
+                case Http -> {
+                    if (endpoint.get().isBlank()) yield "an endpoint";
+                    yield secret.get().isBlank() ? "a secret" : null;
+                }
+            };
+        }
+
+        /** One of its trigger words. Only called once {@link #missing} has come back null. */
+        private String word() {
+            List<String> list = messages.get();
+            return list.size() == 1
+                ? list.get(0)
+                : list.get(ThreadLocalRandom.current().nextInt(list.size()));
+        }
+    }
+
+    private final List<Slot> slots = new ArrayList<>(MAX_BOTS);
+
+    /** True while a default checkbox is being unticked by another one being ticked. */
+    private boolean settling;
+
     private long lastPull;
-
-    /** Last state of each key, so a held key pulls once rather than twenty times a second. */
-    private final boolean[] keyHeld = new boolean[KEY_SLOTS];
 
     public StasisPull() {
         super(NewAddon.CATEGORY, "stasis-pull",
             "Asks a stasis bot to pull you home, by chat, whisper, or StasisBot's encrypted API.");
 
-        // Built in a loop because they only differ by number, and a slot is only shown once the
-        // list has a bot for it: an unexplained row of six empty keybinds is not a setting, it is
-        // a puzzle.
-        for (int i = 0; i < KEY_SLOTS; i++) {
-            final int index = i;
-            keys.add(sgKeys.add(new KeybindSetting.Builder()
-                .name("key-" + (i + 1))
-                .description("Pulls with bot number " + (i + 1) + " in the list. Only read while " +
-                             "the module is on and behaviour is Armed.")
-                .defaultValue(Keybind.none())
-                .visible(() -> parsed().size() > index)
-                .build()));
+        for (int i = 0; i < MAX_BOTS; i++) slots.add(new Slot(i));
+    }
+
+    /** The module, or null before Meteor has built it. */
+    public static StasisPull get() {
+        return Modules.get() == null ? null : Modules.get().get(StasisPull.class);
+    }
+
+    // --- which one is the default --------------------------------------------
+
+    /** Unticks every other default box, so ticking one is choosing rather than adding. */
+    private void keepOnlyDefault(int index) {
+        if (settling) return;
+
+        settling = true;
+        for (Slot slot : slots) {
+            if (slot.index != index && slot.preferred.get()) slot.preferred.set(false);
         }
+        settling = false;
     }
 
-    // --- the bots ------------------------------------------------------------
-
-    /**
-     * The configured bots, exactly as written.
-     *
-     * <p>Unfilled: what a line does not say is still missing here, which is what {@code .stasis
-     * show} needs to tell inherited from set. Use {@link #filled} for a bot about to be used.
-     */
-    public List<StasisBots.Bot> parsed() {
-        return StasisBots.parse(bots.get());
+    /** The bot everything automatic uses: the ticked one, or the first if none is ticked. */
+    private Slot preferred() {
+        for (int i = 0; i < count.get(); i++) {
+            if (slots.get(i).preferred.get()) return slots.get(i);
+        }
+        return slots.get(0);
     }
 
-    /** Writes the list back, so the commands can edit bots without hand-typing a line. */
-    public void store(List<StasisBots.Bot> list) {
-        bots.set(StasisBots.write(list));
+    /** The bot with that name, or null. */
+    private Slot byName(String name) {
+        if (name == null || name.isBlank()) return null;
 
-        // Meteor writes its config out on its own schedule, and the config is what survives a
-        // crash. A bot added from chat should not depend on the game closing tidily.
-        Systems.save();
+        String wanted = name.trim();
+        for (int i = 0; i < count.get(); i++) {
+            if (slots.get(i).label().equalsIgnoreCase(wanted)) return slots.get(i);
+        }
+        return null;
     }
 
-    /** Label of the bot used when nothing says otherwise. */
-    public String defaultLabel() {
-        List<StasisBots.Bot> list = parsed();
-        if (list.isEmpty()) return "";
-
-        StasisBots.Bot bot = StasisBots.pick(list, null, defaultBot.get());
-        return bot == null ? "" : bot.label();
+    /** Every bot that exists, in order. Read by {@code .stasis list}. */
+    public List<String> names() {
+        List<String> out = new ArrayList<>();
+        for (int i = 0; i < count.get(); i++) out.add(slots.get(i).label());
+        return out;
     }
 
-    /**
-     * Marks a bot as the default.
-     *
-     * @return false when no bot has that label, so the caller can say so rather than silently
-     *         writing down a name that means nothing
-     */
-    public boolean setDefault(String label) {
-        StasisBots.Bot bot = StasisBots.byLabel(parsed(), label);
-        if (bot == null) return false;
+    /** How a bot is set up, as one line, for {@code .stasis list}. The secret is never in it. */
+    public String describe(String name) {
+        Slot slot = byName(name);
+        if (slot == null) return null;
 
-        defaultBot.set(bot.label());
+        StringBuilder out = new StringBuilder(slot.label());
+        out.append(" (").append(slot.mode.get().name().toLowerCase()).append(")");
+
+        switch (slot.mode.get()) {
+            case Chat -> out.append(" says ").append(String.join(", ", slot.messages.get()));
+            case Whisper -> out.append(" whispers ").append(slot.account.get());
+            case Http -> out.append(" at ").append(slot.endpoint.get());
+        }
+
+        if (slot.preferred.get()) out.append(" - default");
+        if (slot.key.get().isSet()) out.append(" - bound");
+
+        String missing = slot.missing();
+        if (missing != null) out.append(" - needs ").append(missing);
+
+        return out.toString();
+    }
+
+    /** Names the default bot, for {@code .stasis default}. */
+    public boolean setDefault(String name) {
+        Slot slot = byName(name);
+        if (slot == null) return false;
+
+        slot.preferred.set(true);
+        keepOnlyDefault(slot.index);
         Systems.save();
         return true;
     }
 
-    /**
-     * A bot with every blank filled in from the defaults, ready to be used.
-     *
-     * <p>Kept separate from the parsed form on purpose. A bot that says nothing about its
-     * trigger words and a bot whose trigger words happen to match the default look identical
-     * once filled, and the difference matters when you are reading the config to work out why
-     * two bots answered at once.
-     */
-    public StasisBots.Bot filled(StasisBots.Bot bot) {
-        if (bot == null) return null;
-
-        StasisBots.Mode m = bot.mode() == null ? mode.get() : bot.mode();
-        List<String> say = bot.messages().isEmpty() ? messages.get() : bot.messages();
-        String cmd = bot.command().isBlank() ? whisperCommand.get() : bot.command();
-
-        String target = bot.target();
-        if (target.isBlank()) target = m == StasisBots.Mode.Http ? endpoint.get() : botName.get();
-
-        String key = bot.secret().isBlank() ? secret.get() : bot.secret();
-
-        return new StasisBots.Bot(bot.label(), m, say, cmd, target.trim(), key.trim());
-    }
+    // --- the buttons ---------------------------------------------------------
 
     /**
-     * The bot to use for this pull, filled in and ready.
+     * A row per bot under the settings: its name, and a button that pulls with it.
      *
-     * <p>When the list is empty the defaults are read as a single unnamed bot, which is what
-     * every existing config is: nobody has to learn the line format to keep what they had.
+     * <p>Meteor gives a module one widget below its settings rather than one per section, so
+     * this is the closest thing to a trigger next to each bot - and it is worth having, because
+     * a key you have to bind before you can test a bot is a key you bind before you know the
+     * bot works.
      */
-    private StasisBots.Bot resolve(String label) {
-        List<StasisBots.Bot> list = parsed();
-        if (!list.isEmpty()) return filled(StasisBots.pick(list, label, defaultBot.get()));
+    @Override
+    public WWidget getWidget(GuiTheme theme) {
+        migrate();
 
-        return filled(new StasisBots.Bot("default", null, List.of(), "", "", ""));
+        WTable table = theme.table();
+
+        for (int i = 0; i < count.get(); i++) {
+            Slot slot = slots.get(i);
+            String label = slot.label();
+
+            table.add(theme.label(label));
+
+            WButton button = table.add(theme.button("Pull")).expandCellX().widget();
+            button.action = () -> pull(label);
+
+            table.row();
+        }
+
+        return table;
     }
 
     // --- firing --------------------------------------------------------------
 
     @Override
     public void onActivate() {
-        fired = false;
-        for (int i = 0; i < KEY_SLOTS; i++) keyHeld[i] = false;
+        migrate();
+        for (Slot slot : slots) slot.held = false;
     }
 
     @EventHandler
     private void onTick(TickEvent.Pre event) {
-        if (behaviour.get() == Behaviour.Button) {
-            // Fire once, on the tick after activation, then switch off: toggling out of
-            // onActivate itself would run inside Meteor's own activation.
-            if (fired) return;
-            fired = true;
+        if (mc.player == null) return;
 
-            try {
-                pull();
-            } finally {
-                toggle();
-            }
-            return;
-        }
-
-        pollKeys();
-    }
-
-    /** Reads the per-bot keys, one pull per press. */
-    private void pollKeys() {
-        List<StasisBots.Bot> list = parsed();
-        if (list.isEmpty() || mc.player == null) return;
-
-        for (int i = 0; i < KEY_SLOTS && i < list.size(); i++) {
-            Keybind key = keys.get(i).get();
+        for (int i = 0; i < count.get(); i++) {
+            Slot slot = slots.get(i);
+            Keybind key = slot.key.get();
             boolean down = key.isSet() && key.isPressed();
 
-            // The screen check is on the press rather than the poll, so letting go of a key while
-            // a screen is open does not leave the slot stuck down.
-            if (down && !keyHeld[i] && mc.screen == null) pull(list.get(i).label());
-            keyHeld[i] = down;
+            // The screen check is on the press rather than the poll, so letting go of a key
+            // while a screen is open does not leave the slot stuck down.
+            if (down && !slot.held && mc.screen == null) pull(slot.label());
+            slot.held = down;
         }
     }
 
@@ -343,7 +422,7 @@ public class StasisPull extends Module {
 
     /** True if the default bot has everything it needs to actually send something. */
     public boolean isConfigured() {
-        return StasisBots.usable(resolve(null));
+        return preferred().missing() == null;
     }
 
     /** Sends one pull request to the default bot. Public so other modules can trigger it. */
@@ -354,24 +433,29 @@ public class StasisPull extends Module {
     /**
      * Sends one pull request.
      *
-     * @param label which bot, or null for the default one
+     * @param name which bot, or null for the default one
      */
-    public void pull(String label) {
-        if (mc.player == null) return;
-
-        StasisBots.Bot bot = resolve(label);
-        if (bot == null) {
-            error("No stasis bots configured.");
+    public void pull(String name) {
+        // Off means off, for everything: the keys, the button, and the two modules that fire a
+        // pull on your behalf. A module that keeps working while switched off is not a switch.
+        if (!isActive()) {
+            warning("stasis-pull is off; nothing was sent.");
             return;
         }
 
-        if (label != null && !label.isBlank() && !bot.label().equalsIgnoreCase(label.trim())) {
-            error("No bot called %s; using %s.", label, bot.label());
+        if (mc.player == null) return;
+
+        Slot slot = byName(name);
+        if (slot == null) {
+            if (name != null && !name.isBlank()) {
+                error("No bot called %s; using the default.", name);
+            }
+            slot = preferred();
         }
 
-        String missing = StasisBots.missing(bot);
+        String missing = slot.missing();
         if (missing != null) {
-            error("%s has no %s.", bot.label(), missing);
+            error("%s has no %s.", slot.label(), missing);
             return;
         }
 
@@ -382,33 +466,33 @@ public class StasisPull extends Module {
         }
         lastPull = now;
 
-        switch (bot.mode()) {
+        switch (slot.mode.get()) {
             case Chat -> {
-                String message = pick(bot);
+                String message = slot.word();
                 ChatUtils.sendPlayerMsg(message);
                 if (notify.get()) info("Pull requested.");
-                if (debug.get()) log("chat as %s: %s", bot.label(), message);
+                if (debug.get()) log("chat as %s: %s", slot.label(), message);
             }
 
             case Whisper -> {
-                String message = pick(bot);
+                String message = slot.word();
 
-                String command = bot.command().trim();
+                String command = slot.command.get().trim();
                 if (!command.startsWith("/")) command = "/" + command;
 
-                ChatUtils.sendPlayerMsg(command + " " + bot.target() + " " + message);
+                ChatUtils.sendPlayerMsg(command + " " + slot.account.get().trim() + " " + message);
                 if (notify.get()) info("Pull requested.");
-                if (debug.get()) log("whisper as %s to %s: %s", bot.label(), bot.target(), message);
+                if (debug.get()) log("whisper as %s to %s: %s", slot.label(), slot.account.get(), message);
             }
 
             case Http -> {
                 // Entity#getName is stable across every target; the player's game profile is
                 // not reachable the same way from 1.21.10 onward.
-                String target = mc.player.getName().getString();
+                String me = mc.player.getName().getString();
                 if (notify.get()) info("Pull requested.");
-                if (debug.get()) log("http pull as %s for %s at %s", bot.label(), target, bot.target());
+                if (debug.get()) log("http pull as %s for %s at %s", slot.label(), me, slot.endpoint.get());
 
-                StasisControl.homeRequest(bot.target(), bot.secret(), target, reply -> {
+                StasisControl.homeRequest(slot.endpoint.get(), slot.secret.get(), me, reply -> {
                     // Callback lands on the HTTP thread; chat must be touched on the game one.
                     if (notify.get()) mc.execute(() -> info(reply));
                 });
@@ -416,18 +500,60 @@ public class StasisPull extends Module {
         }
     }
 
-    /** The module, or null before Meteor has built it. */
-    public static StasisPull get() {
-        return Modules.get() == null ? null : Modules.get().get(StasisPull.class);
+    // --- reading an older config ---------------------------------------------
+
+    /**
+     * Fills the sections in from whatever an older version left behind, once.
+     *
+     * <p>The bots used to be lines of text, and before that a single set of settings. Upgrading
+     * should not quietly empty a configuration somebody typed out - and the one thing in there
+     * that is genuinely annoying to replace is a shared secret nobody has written down anywhere
+     * else. Runs on activation and on opening the module's page, and marks itself done.
+     */
+    private void migrate() {
+        if (migrated.get()) return;
+        migrated.set(true);
+
+        List<StasisBots.Bot> old = StasisBots.parse(oldBots.get());
+
+        // No list: the settings that used to describe a single bot, if any of them was touched.
+        if (old.isEmpty()) {
+            boolean touched = !oldSecret.get().isBlank() || !oldAccount.get().isBlank()
+                || oldMode.get() != StasisBots.Mode.Chat;
+            if (!touched) return;
+
+            old = List.of(new StasisBots.Bot("home", oldMode.get(), oldMessages.get(),
+                oldCommand.get(), oldMode.get() == StasisBots.Mode.Http
+                    ? oldEndpoint.get() : oldAccount.get(), oldSecret.get()));
+        }
+
+        int taken = Math.min(old.size(), MAX_BOTS);
+        for (int i = 0; i < taken; i++) {
+            StasisBots.Bot bot = old.get(i);
+            Slot slot = slots.get(i);
+
+            slot.name.set(bot.label());
+            slot.mode.set(bot.mode() == null ? oldMode.get() : bot.mode());
+            slot.messages.set(bot.messages().isEmpty() ? oldMessages.get() : bot.messages());
+            slot.command.set(bot.command().isBlank() ? oldCommand.get() : bot.command());
+
+            if (slot.mode.get() == StasisBots.Mode.Http) {
+                slot.endpoint.set(bot.target().isBlank() ? oldEndpoint.get() : bot.target());
+                slot.secret.set(bot.secret().isBlank() ? oldSecret.get() : bot.secret());
+            } else {
+                slot.account.set(bot.target().isBlank() ? oldAccount.get() : bot.target());
+            }
+
+            slot.preferred.set(i == 0);
+        }
+
+        count.set(Math.max(taken, 1));
+        Systems.save();
+
+        NewAddon.LOG.info("[StasisPull] read {} bot(s) from the old configuration", taken);
     }
 
     private void log(String fmt, Object... args) {
         NewAddon.LOG.info("[StasisPull] " + String.format(fmt, args));
-    }
-
-    /** One of the bot's trigger words. Never empty: {@code missing} has already run. */
-    private static String pick(StasisBots.Bot bot) {
-        List<String> list = bot.messages();
-        return list.size() == 1 ? list.get(0) : list.get(ThreadLocalRandom.current().nextInt(list.size()));
     }
 }
