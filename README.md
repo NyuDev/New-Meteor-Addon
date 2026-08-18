@@ -371,6 +371,13 @@ friending someone takes them off the enemy list — however it was done, includi
 and Meteor's own Friends tab, which a watcher reconciles once a second. Nobody is both, so no
 part of the client has to guess which colour you meant.
 
+**`.friends add` takes people who are offline.** Meteor's takes a tab-list entry, so a name
+that is not connected right now comes back as "player list entry with name X doesn't exist" —
+even though its own Friends tab has never had the restriction and resolves the UUID from Mojang
+afterwards. A mixin appends a second `add` that takes a plain name; Brigadier merges it onto
+Meteor's own node and tries Meteor's first, so someone who *is* on the server still gets their
+real UUID from the tab list for free, and only the names that would have failed reach ours.
+
 Its colour sits with Meteor's own, in **Config → Visual → `enemy-color`**, right under
 `friend-color`, and it is read fresh each frame: change the swatch and the names and the skull
 follow immediately. Enemies are coloured **in the tab list** too, the way Meteor colours friends

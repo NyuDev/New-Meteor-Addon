@@ -6,6 +6,7 @@
 	"client": [
 		"AbstractContainerScreenMixin",
 		"BetterTabMixin",
+		"FriendsCommandMixin",
 		"GuiGraphicsMixin",
 		"AbstractSignEditScreenMixin",
 		"MultiPlayerGameModeMixin",
