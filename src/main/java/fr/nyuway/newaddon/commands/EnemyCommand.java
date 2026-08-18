@@ -7,6 +7,7 @@ import meteordevelopment.meteorclient.commands.Command;
 import meteordevelopment.meteorclient.systems.friends.Friends;
 
 import java.util.List;
+import java.util.UUID;
 
 /**
  * {@code .enemy} - the addon's enemy list, managed from chat the way BepHax did it.
@@ -42,7 +43,10 @@ public class EnemyCommand extends Command {
                 // Asked before the add, since the add is what takes them off the friend list.
                 boolean wasFriend = Friends.get().get(name) != null;
 
-                if (!Enemies.add(name)) info("%s is already an enemy.", name);
+                // With their id when they are standing right there. Not required - marking
+                // somebody you have only heard of is half the point of the list - but an entry
+                // that has one survives them changing their name.
+                if (!Enemies.add(name, idOf(name))) info("%s is already an enemy.", name);
                 else if (wasFriend) info("Added %s to enemies, and off the friend list.", name);
                 else info("Added %s to enemies.", name);
                 return OK;
@@ -58,8 +62,22 @@ public class EnemyCommand extends Command {
 
         builder.then(literal("list").executes(ctx -> {
             List<String> names = Enemies.names();
-            if (names.isEmpty()) info("No enemies.");
-            else info("Enemies (%d): %s", names.size(), String.join(", ", names));
+            if (names.isEmpty()) {
+                info("No enemies.");
+                return OK;
+            }
+
+            // One per line rather than one long line, and each says what is actually known
+            // about it: whether they are here, and whether the entry has an id yet. That is
+            // the difference between an entry that survives a rename and one that does not,
+            // and it is the first thing to look at when a colour is missing.
+            info("Enemies (%d):", names.size());
+            for (String name : names) {
+                boolean here = idOf(name) != null;
+                info("  %s - %s, %s", name,
+                    here ? "here" : "not on the server",
+                    Enemies.isKnown(name) ? "id known" : "id not known yet");
+            }
             return OK;
         }));
 
@@ -68,5 +86,14 @@ public class EnemyCommand extends Command {
             info("Cleared the enemy list.");
             return OK;
         }));
+    }
+
+    /** Their id if they are on the server right now, or null. The tab list, nothing more. */
+    private static UUID idOf(String name) {
+        var mc = meteordevelopment.meteorclient.MeteorClient.mc;
+        if (mc.getConnection() == null) return null;
+
+        var info = mc.getConnection().getPlayerInfo(name);
+        return info == null ? null : fr.nyuway.newaddon.utils.Profiles.idOf(info.getProfile());
     }
 }

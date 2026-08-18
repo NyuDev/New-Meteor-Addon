@@ -44,8 +44,8 @@ public class BetterTabMixin {
                                         CallbackInfoReturnable<Component> callback) {
         if (info == null) return;
 
-        String name = Profiles.nameOf(info.getProfile());
-        if (name == null || !Enemies.isEnemy(name)) return;
+        var profile = info.getProfile();
+        if (!Enemies.isEnemy(Profiles.idOf(profile), Profiles.nameOf(profile))) return;
 
         Component drawn = callback.getReturnValue();
         if (drawn == null) return;

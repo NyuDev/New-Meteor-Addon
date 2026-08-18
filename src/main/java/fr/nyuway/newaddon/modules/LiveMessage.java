@@ -596,9 +596,14 @@ public class LiveMessage extends Module {
         info(settings.isMuted ? "Muted %s." : "Unmuted %s.", displayName(peer));
     }
 
-    /** Whether this person is on the addon's enemy list, by their current name. */
+    /**
+     * Whether this person is on the addon's enemy list.
+     *
+     * <p>By id first. A conversation is keyed by id and outlives any number of renames, so the
+     * name in front of you is the weaker of the two things known about them.
+     */
     public boolean isEnemy(java.util.UUID peer) {
-        return Enemies.isEnemy(displayName(peer));
+        return Enemies.isEnemy(peer, displayName(peer));
     }
 
     /**
@@ -610,14 +615,17 @@ public class LiveMessage extends Module {
      */
     public void toggleEnemy(java.util.UUID peer) {
         String name = displayName(peer);
-        if (Enemies.isEnemy(name)) {
-            Enemies.remove(name);
+        if (Enemies.isEnemy(peer, name)) {
+            Enemies.remove(peer, name);
             info("Removed %s from enemies.", name);
             return;
         }
 
         boolean wasFriend = isFriend(peer);
-        Enemies.add(name);
+
+        // The id goes in with them. It is the whole difference between an entry that survives
+        // them changing their name and one that quietly stops applying.
+        Enemies.add(name, peer);
         if (wasFriend) info("Added %s to enemies, and off the friend list.", name);
         else info("Added %s to enemies.", name);
     }

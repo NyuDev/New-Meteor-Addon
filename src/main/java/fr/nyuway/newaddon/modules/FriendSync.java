@@ -90,6 +90,16 @@ public class FriendSync extends Module {
         .defaultValue(List.of(";friend sync meteor"))
         .build());
 
+    private final Setting<Boolean> enemySyncOnJoin = sgGeneral.add(new BoolSetting.Builder()
+        .name("enemy-sync-on-join")
+        .description("Send the whole enemy list once after joining. Enemies have no equivalent " +
+                     "of the friend sync command - there is no shared list for the other client " +
+                     "to re-read - so without this it only ever hears about enemies added while " +
+                     "it happened to be running, and everyone marked before that is unknown to " +
+                     "it for ever. Paced like everything else, one every send-interval ticks.")
+        .defaultValue(true)
+        .build());
+
     private final Setting<Boolean> syncOnJoin = sgGeneral.add(new BoolSetting.Builder()
         .name("sync-on-join")
         .description("Send the sync commands a few seconds after joining a world, so a client " +
@@ -151,7 +161,10 @@ public class FriendSync extends Module {
 
         if (inWorld < JOIN_DELAY) {
             inWorld++;
-            if (inWorld == JOIN_DELAY && syncOnJoin.get()) sync();
+            if (inWorld == JOIN_DELAY) {
+                if (syncOnJoin.get()) sync();
+                if (enemySyncOnJoin.get()) replayEnemies();
+            }
         }
 
         // Before anything is queued, so a burst leaves at a steady rate rather than in whatever
@@ -217,6 +230,29 @@ public class FriendSync extends Module {
      */
     private void sync() {
         fire(onSync.get(), "");
+    }
+
+    /**
+     * Sends the whole enemy list, as though every one of them had just been added.
+     *
+     * <p>The friend side has a sync command: one line, and the other client reads Meteor's list
+     * itself. Enemies live in a file only this addon knows about, so there is nothing to point
+     * anybody at - the list has to be spoken. Which means it never was: only changes made while
+     * both clients were running ever went across, and everyone marked before that was unknown on
+     * the other side, indefinitely, while plainly sitting in {@code .enemy list} here.
+     *
+     * <p>Sending an add for somebody already marked is harmless - the other client says it
+     * already knew - so replaying the list costs nothing but the messages, and those are paced.
+     */
+    private void replayEnemies() {
+        List<String> names = Enemies.names();
+        if (names.isEmpty()) return;
+
+        currentKind = ENEMY_ADD;
+        for (String name : names) fire(onEnemyAdd.get(), name);
+        currentKind = SYNC;
+
+        if (log.get()) info("Queued %d enemy(ies) for the other clients.", names.size());
     }
 
     private void fire(List<String> templates, String name) {

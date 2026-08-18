@@ -363,13 +363,28 @@ starts the clock over.
 ## Friends and enemies
 
 Meteor ships a friend list and no opposite, so this adds one: `.enemy add <name>`, `remove`,
-`list`, `clear`, kept as plain names in `meteor-client/new-addon/enemies.txt`. Names rather than
-UUIDs, so someone who has never been in your tab list can still be marked.
+`list`, `clear`, kept in `meteor-client/new-addon/enemies.txt` as `Name=uuid`.
+
+**A name to add them, an id to keep them.** A name is what you have when you mark somebody — it
+is what the command takes and what chat carries, and marking a player you have only heard of is
+half the point. An id is what *stays*. So the id is not required, it is learned: everyone in the
+tab list is checked once a second, and the first time an enemy is seen theirs is attached to the
+entry. After that the id decides. A rename is followed automatically and the entry rewritten, and
+a name later taken by somebody else no longer carries the mark — the entry answers for that id
+and nobody else. `.enemy list` says, per entry, whether they are here and whether their id is
+known yet.
 
 **The two are exclusive.** Making someone an enemy takes them off Meteor's friend list, and
 friending someone takes them off the enemy list — however it was done, including `.friend add`
 and Meteor's own Friends tab, which a watcher reconciles once a second. Nobody is both, so no
 part of the client has to guess which colour you meant.
+
+**The enemy list is sent to your other clients whole, on join.** Friends have a sync command —
+one line, and the other client re-reads Meteor's list itself. Enemies live in a file only this
+addon knows about, so there is nothing to point anybody at, and only changes made while both
+clients were running ever crossed: everyone marked before that stayed unknown on the other side
+indefinitely, while sitting in `.enemy list` here. FriendSync's `enemy-sync-on-join` now replays
+the list, paced like everything else. An add for somebody already marked is harmless.
 
 **`.friends add` takes people who are offline.** Meteor's takes a tab-list entry, so a name
 that is not connected right now comes back as "player list entry with name X doesn't exist" —

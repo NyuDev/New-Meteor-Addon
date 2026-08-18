@@ -52,7 +52,13 @@ public final class Relations {
         // Reading Meteor's list and writing only ours, so nothing is modified while iterated.
         for (Friend friend : Friends.get()) {
             String name = friend.getName();
-            if (Enemies.isEnemy(name)) Enemies.remove(name);
+            if (!Enemies.isEnemy(name)) continue;
+
+            // Said out loud. An entry disappearing from the enemy list without a word is
+            // indistinguishable from the list being ignored, and it is the first thing to
+            // suspect when a colour does not show.
+            NewAddon.LOG.info("[relations] {} is a friend, so no longer an enemy", name);
+            Enemies.remove(name);
         }
 
         renames();
@@ -83,6 +89,11 @@ public final class Relations {
             UUID id = Profiles.idOf(info.getProfile());
             String now = Profiles.nameOf(info.getProfile());
 
+            // Every player, every second: two map lookups that attach an id to an enemy the
+            // first time they are seen, and follow a rename after that. This is what keeps an
+            // entry pointing at a person rather than at a name they used to have.
+            Enemies.learn(id, now);
+
             String before = NameLedger.record(id, now);
             if (before == null) continue;
 
@@ -98,9 +109,14 @@ public final class Relations {
                 changedFriends = true;
             }
 
-            // The other two lists are keyed by name as well, and a stale key in either is a
-            // relationship attached to a name nobody has any more.
-            if (Enemies.remove(before)) Enemies.add(now);
+            // The enemy under their old name, for the one case the loop above cannot see: an
+            // enemy added by name who had already renamed before we ever laid eyes on them, so
+            // the entry never matched anyone to attach an id to. The old name is the link.
+            Enemies.learn(id, before);
+            Enemies.learn(id, now);
+
+            // Temporary friends are still keyed by name alone, and a stale key there is a
+            // friendship attached to a name nobody has any more.
             TempFriends.rename(before, now);
         }
 

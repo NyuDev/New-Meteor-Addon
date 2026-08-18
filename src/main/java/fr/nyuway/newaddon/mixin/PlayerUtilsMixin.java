@@ -44,8 +44,10 @@ public class PlayerUtilsMixin {
                                                CallbackInfoReturnable<Color> callback) {
         if (entity == null || defaultColor == null) return;
 
-        String name = Profiles.nameOf(entity.getGameProfile());
-        if (name == null || !Enemies.isEnemy(name)) return;
+        // By id where there is one: a player who renamed is still the same player, and the
+        // entity in front of us is exactly the case where the id is free to read.
+        var profile = entity.getGameProfile();
+        if (!Enemies.isEnemy(Profiles.idOf(profile), Profiles.nameOf(profile))) return;
 
         int rgb = Enemies.color();
         callback.setReturnValue(newAddon$enemyColor.set(
