@@ -51,14 +51,19 @@ public class BetterTabMixin {
 
         // Enemy first; then ally, which has to be decided here because an ally is on Meteor's
         // friend list and would otherwise be drawn as an ordinary friend.
-        Integer marked = Enemies.isEnemy(id, who) ? Enemies.color()
-            : Allies.isAlly(id, who) ? Allies.color() : null;
-        if (marked == null) return;
+        //
+        // Two booleans and no boxing, deliberately. Written as a conditional yielding a nullable
+        // Integer, this threw a NullPointerException on every unmarked player: mixing an int
+        // branch with a null branch makes the whole expression int by binary numeric promotion,
+        // so the null was unboxed before anything could check it - and this runs for every row
+        // of the tab list, so opening the tab list crashed the game.
+        boolean enemy = Enemies.isEnemy(id, who);
+        if (!enemy && !Allies.isAlly(id, who)) return;
 
         Component drawn = callback.getReturnValue();
         if (drawn == null) return;
 
-        int colour = marked;
+        int colour = enemy ? Enemies.color() : Allies.color();
         callback.setReturnValue(Component.literal(drawn.getString())
             .withStyle(style -> style.withColor(colour)));
     }
