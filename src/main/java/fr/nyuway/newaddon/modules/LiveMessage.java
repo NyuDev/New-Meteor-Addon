@@ -20,6 +20,7 @@ import meteordevelopment.meteorclient.settings.SettingGroup;
 import meteordevelopment.meteorclient.settings.StringListSetting;
 import meteordevelopment.meteorclient.settings.StringSetting;
 import meteordevelopment.meteorclient.systems.modules.Module;
+import meteordevelopment.meteorclient.systems.modules.Modules;
 import meteordevelopment.meteorclient.utils.misc.Keybind;
 import meteordevelopment.meteorclient.utils.player.ChatUtils;
 import meteordevelopment.orbit.EventHandler;
@@ -342,12 +343,16 @@ public class LiveMessage extends Module {
             info("New conversation with %s.", hit.peer());
         }
 
-        // Sound and toast share one gate - a message that arrived while you were playing - so
-        // they always agree. Neither fires behind an open screen: the window itself is where a
-        // message shows once you are looking, and a toast over your own inventory is noise.
-        // Muting drops both while keeping the message: it is the notification that is turned
-        // off, not the conversation.
-        if (isIncoming && !ignored && !muted && mc.screen == null && mc.player != null) {
+        // Sound and toast share one gate, so they always agree. Muting drops both while keeping
+        // the message: it is the notification that is turned off, not the conversation.
+        //
+        // No screen check. It used to be there on the theory that a message which arrives while
+        // you are looking at something does not need announcing - which is wrong for every
+        // screen there is. In a chest you are not reading chat; in the pause menu you are not
+        // even in the game; and in this window itself the conversation may be one of eight
+        // behind the one in front. Whether you are told is a setting, not a guess about what
+        // you were doing.
+        if (isIncoming && !ignored && !muted && mc.player != null) {
             if (notifySound.get()) {
                 mc.player.playSound(net.minecraft.sounds.SoundEvents.EXPERIENCE_ORB_PICKUP, 1f, 1.6f);
             }
@@ -366,16 +371,64 @@ public class LiveMessage extends Module {
     }
 
     /**
-     * Draws the toasts on the HUD.
+     * Draws the toasts on the HUD, while you are playing.
      *
-     * <p>Meteor fires this at the tail of the in-game HUD render, so it runs while you are
-     * playing and not while a screen is up - which is exactly when a toast is wanted and the
-     * window is not. The one draw-context split at 26.1 is hidden inside {@link LiveCanvas#of}.
+     * <p>Meteor fires this at the tail of the in-game HUD render. The HUD is drawn <em>before</em>
+     * any open screen and therefore underneath it, so this path stops at the point a screen goes
+     * up and {@link #renderOverScreen} takes over - same toasts, drawn somewhere they can be
+     * seen. The one draw-context split at 26.1 is hidden inside {@link LiveCanvas#of}.
      */
     @EventHandler
     private void onRender2D(Render2DEvent event) {
         if (mc.screen != null) return;
         toasts.render(LiveCanvas.of(event), event.screenWidth);
+    }
+
+    /**
+     * Draws the toasts over whatever screen is up - a chest, the pause menu, this window.
+     *
+     * <p>Called from a mixin on the one method that wraps a whole screen's drawing, so it lands
+     * on top of everything the screen put down, including its tooltips and including this
+     * addon's own windows.
+     *
+     * <p>Static, and quiet about it: the mixin fires for every screen in the game and has no
+     * business knowing whether this module exists, let alone whether it is switched on.
+     */
+    public static void renderOverScreen(LiveCanvas canvas, int width) {
+        if (Modules.get() == null) return;
+
+        LiveMessage module = Modules.get().get(LiveMessage.class);
+        if (module == null || !module.isActive()) return;
+
+        module.toasts.render(canvas, width);
+    }
+
+    // --- what had focus -----------------------------------------------------
+
+    /**
+     * The window that was in front when the screen was last closed, so it is in front again.
+     *
+     * <p>Null means the buddy list, which is a real answer and not an absent one - hence the
+     * separate flag. Kept for the session rather than written down: it is where you were a
+     * moment ago, and a moment ago does not survive closing the game.
+     */
+    private java.util.UUID focusedPeer;
+    private boolean haveFocus;
+
+    /** Records what is in front. Called by the screen whenever focus moves, not only on close. */
+    public void rememberFocus(java.util.UUID peer) {
+        focusedPeer = peer;
+        haveFocus = true;
+    }
+
+    /** Whether anything has been focused yet this session. */
+    public boolean haveFocusMemory() {
+        return haveFocus;
+    }
+
+    /** Who was in front, or null for the buddy list. Only meaningful with {@link #haveFocusMemory}. */
+    public java.util.UUID focusMemory() {
+        return focusedPeer;
     }
 
     /**

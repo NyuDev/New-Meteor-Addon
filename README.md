@@ -253,9 +253,17 @@ its unread badge, and each remembers whether you folded it shut.
 A conversation carries a heart to friend them, a skull to make them an
 enemy, a speaker to mute and a barred circle to ignore, each lit while its toggle is on.
 
-A whisper that lands with the window closed slides an advancement-style toast in from the
-top-right, showing the sender and a preview of what they said; the sound and the toast are
-independent, so either can carry the alert alone.
+A whisper slides an advancement-style toast in from the top-right, showing the sender and a
+preview of what they said; the sound and the toast are independent, so either can carry the
+alert alone. **Both fire whatever you are looking at** — in a chest, in the pause menu, or with
+this window itself open on somebody else's conversation. Whether you are told is a setting, not
+a guess about what you were doing. The toast is drawn by a mixin on the method that wraps a
+whole screen's render, so it lands on top of the screen rather than behind it, which is where
+the HUD would have put it.
+
+The screen also remembers which window had focus and puts it back in front when you reopen it —
+unless something arrived while you were away, in which case that conversation wins. A window
+jumping in front of a message you have not read yet is worse than no memory at all.
 
 Anything unread carries a yellow count beside the name in the list, and **opens by itself when
 you open the menu** — the people who wrote to you are the reason you opened it, so you should

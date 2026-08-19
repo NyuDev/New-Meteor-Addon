@@ -49,8 +49,12 @@ public class LiveScreen extends Screen {
         this.store = store;
     }
 
+    /** True while {@link #init} is putting the windows up, so that is not mistaken for focusing. */
+    private boolean building;
+
     @Override
     protected void init() {
+        building = true;
         windows.clear();
         windows.add(new LiveBuddyWindow(module, store, this::openChat, width, height));
 
@@ -64,7 +68,40 @@ public class LiveScreen extends Screen {
         //
         // Opened after the remembered ones, so an unread conversation is what has focus rather
         // than whatever happened to be open when the screen was last closed.
-        for (UUID peer : module.unreadPeers()) openChat(peer, false);
+        List<UUID> unread = module.unreadPeers();
+        for (UUID peer : unread) openChat(peer, false);
+
+        building = false;
+
+        // Nothing came in while you were away, so put back what you were looking at. Deliberately
+        // second: somebody writing to you outranks where you happened to leave the mouse, and a
+        // window that jumps in front of a message you have not read yet is worse than no memory
+        // at all.
+        if (unread.isEmpty()) restoreFocus();
+    }
+
+    /**
+     * Brings back whatever was in front when the screen was last closed.
+     *
+     * <p>Silent when the window is not there any more - a conversation closed since - because
+     * whatever {@link #init} put in front is then a better answer than nothing.
+     */
+    private void restoreFocus() {
+        if (!module.haveFocusMemory()) return;
+
+        UUID peer = module.focusMemory();
+        if (peer == null) {
+            // The buddy list, which is the first window and a real answer in its own right.
+            if (!windows.isEmpty()) focus(windows.get(0));
+            return;
+        }
+
+        for (LiveWindow window : windows) {
+            if (window instanceof LiveChatWindow chat && chat.peer.equals(peer)) {
+                focus(window);
+                return;
+            }
+        }
     }
 
     /**
@@ -98,6 +135,13 @@ public class LiveScreen extends Screen {
         windows.remove(window);
         windows.add(window);
         for (LiveWindow other : windows) other.active = other == window;
+
+        // Written down as it happens rather than on the way out. A screen can go away without
+        // anything being told about it - another screen opening over it, the game closing - and
+        // recording the last thing that actually happened cannot miss any of those.
+        if (!building) {
+            module.rememberFocus(window instanceof LiveChatWindow chat ? chat.peer : null);
+        }
     }
 
     private LiveWindow top() {

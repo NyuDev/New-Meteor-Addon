@@ -11,7 +11,8 @@
 		"AbstractSignEditScreenMixin",
 		"MultiPlayerGameModeMixin",
 		"PlayerTabOverlayMixin",
-		"PlayerUtilsMixin"
+		"PlayerUtilsMixin",
+		"ScreenMixin"
 	],
 	"injectors": {
 		"defaultRequire": 0
