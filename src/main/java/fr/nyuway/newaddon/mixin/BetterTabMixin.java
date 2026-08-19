@@ -1,5 +1,6 @@
 package fr.nyuway.newaddon.mixin;
 
+import fr.nyuway.newaddon.utils.Allies;
 import fr.nyuway.newaddon.utils.Enemies;
 import fr.nyuway.newaddon.utils.Profiles;
 // Meteor moved the module from misc to render at its 0.5.6, which is the build for 1.20.4.
@@ -45,12 +46,19 @@ public class BetterTabMixin {
         if (info == null) return;
 
         var profile = info.getProfile();
-        if (!Enemies.isEnemy(Profiles.idOf(profile), Profiles.nameOf(profile))) return;
+        java.util.UUID id = Profiles.idOf(profile);
+        String who = Profiles.nameOf(profile);
+
+        // Enemy first; then ally, which has to be decided here because an ally is on Meteor's
+        // friend list and would otherwise be drawn as an ordinary friend.
+        Integer marked = Enemies.isEnemy(id, who) ? Enemies.color()
+            : Allies.isAlly(id, who) ? Allies.color() : null;
+        if (marked == null) return;
 
         Component drawn = callback.getReturnValue();
         if (drawn == null) return;
 
-        int colour = Enemies.color();
+        int colour = marked;
         callback.setReturnValue(Component.literal(drawn.getString())
             .withStyle(style -> style.withColor(colour)));
     }

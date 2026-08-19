@@ -1,6 +1,7 @@
 package fr.nyuway.newaddon.utils;
 
 import fr.nyuway.newaddon.NewAddon;
+import fr.nyuway.newaddon.modules.FriendBypass;
 import fr.nyuway.newaddon.modules.TempFriends;
 import meteordevelopment.meteorclient.MeteorClient;
 import meteordevelopment.meteorclient.events.world.TickEvent;
@@ -61,6 +62,23 @@ public final class Relations {
             Enemies.remove(name);
         }
 
+        // An ally tag on somebody who is not on the friend list is a claim about nothing: the
+        // tag says why they are a friend, and they are not one. Unfriending by hand is the
+        // ordinary way to reach that, and it should not need a second command to tidy up after.
+        //
+        // Not during a bypass, though. That empties the friend list on purpose and puts it back
+        // afterwards, so every ally would look unfriended for the length of a fight and the tags
+        // would be gone by the time the friendships came back - which is the one case where an
+        // ally who is not a friend is exactly what was meant.
+        if (!FriendBypass.rearranging()) {
+            for (String name : Allies.names()) {
+                if (Friends.get().get(name) != null) continue;
+
+                NewAddon.LOG.info("[relations] {} is not a friend, so no longer an ally", name);
+                Allies.remove(name);
+            }
+        }
+
         renames();
     }
 
@@ -93,6 +111,7 @@ public final class Relations {
             // first time they are seen, and follow a rename after that. This is what keeps an
             // entry pointing at a person rather than at a name they used to have.
             Enemies.learn(id, now);
+            Allies.learn(id, now);
 
             String before = NameLedger.record(id, now);
             if (before == null) continue;
@@ -114,6 +133,8 @@ public final class Relations {
             // the entry never matched anyone to attach an id to. The old name is the link.
             Enemies.learn(id, before);
             Enemies.learn(id, now);
+            Allies.learn(id, before);
+            Allies.learn(id, now);
 
             // Temporary friends are still keyed by name alone, and a stale key there is a
             // friendship attached to a name nobody has any more.

@@ -340,6 +340,10 @@ public final class Enemies {
 
         save();
         unfriend(name);
+
+        // The ally tag says why somebody is a friend, and they have just stopped being one.
+        // Done here rather than left to Relations so the colour changes with the click.
+        Allies.remove(id, name);
         return true;
     }
 

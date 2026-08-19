@@ -1,5 +1,6 @@
 package fr.nyuway.newaddon.mixin;
 
+import fr.nyuway.newaddon.utils.Allies;
 import fr.nyuway.newaddon.utils.Enemies;
 import fr.nyuway.newaddon.utils.Profiles;
 import net.minecraft.client.gui.components.PlayerTabOverlay;
@@ -36,14 +37,21 @@ public class PlayerTabOverlayMixin {
         if (info == null) return;
 
         var profile = info.getProfile();
-        if (!Enemies.isEnemy(Profiles.idOf(profile), Profiles.nameOf(profile))) return;
+        java.util.UUID id = Profiles.idOf(profile);
+        String who = Profiles.nameOf(profile);
+
+        // Enemy first; then ally, which has to be decided here because an ally is on Meteor's
+        // friend list and would otherwise be drawn as an ordinary friend.
+        Integer marked = Enemies.isEnemy(id, who) ? Enemies.color()
+            : Allies.isAlly(id, who) ? Allies.color() : null;
+        if (marked == null) return;
 
         Component drawn = callback.getReturnValue();
         if (drawn == null) return;
 
         // Flattened, not recoloured in place: a component's children keep their own styles and
         // a colour set on the parent loses to them, which is a quiet way to draw nothing.
-        TextColor colour = TextColor.fromRgb(Enemies.color());
+        TextColor colour = TextColor.fromRgb(marked);
         callback.setReturnValue(Component.literal(drawn.getString())
             .withStyle(style -> style.withColor(colour)));
     }

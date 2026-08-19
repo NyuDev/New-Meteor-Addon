@@ -1,5 +1,6 @@
 package fr.nyuway.newaddon.mixin;
 
+import fr.nyuway.newaddon.utils.Allies;
 import fr.nyuway.newaddon.utils.Enemies;
 import fr.nyuway.newaddon.utils.Profiles;
 import meteordevelopment.meteorclient.utils.player.PlayerUtils;
@@ -37,7 +38,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 @Mixin(value = PlayerUtils.class, remap = false)
 public class PlayerUtilsMixin {
 
-    private static final Color newAddon$enemyColor = new Color();
+    private static final Color newAddon$markedColor = new Color();
 
     @Inject(method = "getPlayerColor", at = @At("HEAD"), cancellable = true, require = 0)
     private static void newAddon$colourEnemies(Player entity, Color defaultColor,
@@ -47,10 +48,18 @@ public class PlayerUtilsMixin {
         // By id where there is one: a player who renamed is still the same player, and the
         // entity in front of us is exactly the case where the id is free to read.
         var profile = entity.getGameProfile();
-        if (!Enemies.isEnemy(Profiles.idOf(profile), Profiles.nameOf(profile))) return;
+        java.util.UUID id = Profiles.idOf(profile);
+        String name = Profiles.nameOf(profile);
 
-        int rgb = Enemies.color();
-        callback.setReturnValue(newAddon$enemyColor.set(
+        // Enemy first: the two are exclusive, but a stale tag should never be the reason a
+        // player is drawn as safe. Ally before Meteor's own friend branch, which this runs in
+        // front of - an ally is a friend, so leaving it to Meteor would draw the friend colour
+        // and the distinction would exist everywhere except where it is looked at.
+        int rgb;
+        if (Enemies.isEnemy(id, name)) rgb = Enemies.color();
+        else if (Allies.isAlly(id, name)) rgb = Allies.color();
+        else return;
+        callback.setReturnValue(newAddon$markedColor.set(
             (rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF, rgb & 0xFF, defaultColor.a));
     }
 }

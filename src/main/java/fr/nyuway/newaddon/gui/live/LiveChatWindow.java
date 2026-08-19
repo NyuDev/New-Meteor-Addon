@@ -4,6 +4,7 @@ import fr.nyuway.newaddon.modules.LiveMessage;
 import fr.nyuway.newaddon.modules.dm.LiveStore;
 import fr.nyuway.newaddon.modules.ServerStats;
 import fr.nyuway.newaddon.modules.TempFriends;
+import fr.nyuway.newaddon.utils.Allies;
 import fr.nyuway.newaddon.utils.Enemies;
 import fr.nyuway.newaddon.utils.NameLedger;
 import fr.nyuway.newaddon.utils.vc.VcTypes;
@@ -240,6 +241,15 @@ public class LiveChatWindow extends LiveWindow {
                 if ((rows[r] & (1 << (6 - i))) != 0) c.box(ox + i, oy + r, 1, 1, color);
     };
 
+    /** A shield - an ally, which is a friendship your group made rather than one you did. */
+    private static final Icon SHIELD = (c, bx, by, bw, bh, color) -> {
+        int ox = bx + (bw - 7) / 2, oy = by + (bh - 7) / 2;
+        int[] rows = {0b1111111, 0b1111111, 0b1111111, 0b0111110, 0b0111110, 0b0011100, 0b0001000};
+        for (int r = 0; r < rows.length; r++)
+            for (int i = 0; i < 7; i++)
+                if ((rows[r] & (1 << (6 - i))) != 0) c.box(ox + i, oy + r, 1, 1, color);
+    };
+
     /** A skull - enemy, the opposite of the friend heart and drawn the same pixel way. */
     private static final Icon ENEMY = (c, bx, by, bw, bh, color) -> {
         int ox = bx + (bw - 7) / 2, oy = by + (bh - 7) / 2;
@@ -312,6 +322,14 @@ public class LiveChatWindow extends LiveWindow {
 
         // A friend for now: the person you have just met and are about to do something with,
         // who should not still be on the list next month.
+        // An ally sits beside the heart because it is the same answer to "can I shoot" with a
+        // different reason behind it, and it is drawn in its own darker green so the two are
+        // told apart at a glance rather than by hovering.
+        buttons.add(new LiveButton(90, TITLEBAR + 4, 12, 12, true, SHIELD,
+            () -> module.isAlly(peer), Allies::color,
+            () -> module.isAlly(peer) ? "Not an ally any more" : "Mark as an ally",
+            () -> module.toggleAlly(peer)));
+
         buttons.add(new LiveButton(75, TITLEBAR + 4, 12, 12, true, HOURGLASS,
             () -> TempFriends.isTemporary(module.displayName(peer)), 0xF2C94C,
             () -> TempFriends.isTemporary(module.displayName(peer))

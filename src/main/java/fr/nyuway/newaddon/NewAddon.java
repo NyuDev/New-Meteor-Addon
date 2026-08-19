@@ -1,5 +1,6 @@
 package fr.nyuway.newaddon;
 
+import fr.nyuway.newaddon.commands.AllyCommand;
 import fr.nyuway.newaddon.commands.EnemyCommand;
 import fr.nyuway.newaddon.commands.StasisCommand;
 import fr.nyuway.newaddon.commands.TempFriendCommand;
@@ -66,6 +67,7 @@ public class NewAddon extends MeteorAddon {
         Modules.get().add(new ShulkerOverview());
 
         Commands.add(new EnemyCommand());
+        Commands.add(new AllyCommand());
         Commands.add(new VcCommand());
         Commands.add(new TempFriendCommand());
         Commands.add(new StasisCommand());
@@ -74,6 +76,7 @@ public class NewAddon extends MeteorAddon {
         // window between Systems.init() and Systems.load() or it will not remember what it was
         // set to, and the friend/enemy rule should hold whether or not a module is switched on.
         Enemies.registerColorSetting();
+        fr.nyuway.newaddon.utils.Allies.registerColorSetting();
         Relations.install();
     }
 

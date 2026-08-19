@@ -6,6 +6,7 @@ import fr.nyuway.newaddon.gui.live.LiveScreen;
 import fr.nyuway.newaddon.gui.live.LiveToasts;
 import fr.nyuway.newaddon.modules.dm.DmPatterns;
 import fr.nyuway.newaddon.modules.dm.LiveStore;
+import fr.nyuway.newaddon.utils.Allies;
 import fr.nyuway.newaddon.utils.Enemies;
 import fr.nyuway.newaddon.utils.Profiles;
 import meteordevelopment.meteorclient.events.game.ReceiveMessageEvent;
@@ -467,6 +468,8 @@ public class LiveMessage extends Module {
         // important fact about them, and it was the one thing the frame did not say.
         if (isEnemy(peer)) return Enemies.color();
 
+        if (friendColor.get() && isAlly(peer)) return Allies.color();
+
         if (friendColor.get() && isFriend(peer)) {
             var c = meteordevelopment.meteorclient.systems.config.Config.get().friendColor.get();
             return (c.r << 16) | (c.g << 8) | c.b;
@@ -483,6 +486,10 @@ public class LiveMessage extends Module {
     public int nameColor(java.util.UUID peer) {
         if (isEnemy(peer)) return Enemies.color();
         if (isIgnored(peer)) return 0xDC5050;
+        // Before the friend branch, since an ally is on the friend list and would be caught by
+        // it. Same colour family, darker: the answer to "can I shoot" is the same, the answer to
+        // "do I tell them where I am" is not.
+        if (isAlly(peer)) return Allies.color();
         if (isFriend(peer)) {
             var c = meteordevelopment.meteorclient.systems.config.Config.get().friendColor.get();
             return (c.r << 16) | (c.g << 8) | c.b;
@@ -657,6 +664,32 @@ public class LiveMessage extends Module {
      */
     public boolean isEnemy(java.util.UUID peer) {
         return Enemies.isEnemy(peer, displayName(peer));
+    }
+
+    /** Whether this person is an ally - a friend your group has an agreement with. */
+    public boolean isAlly(java.util.UUID peer) {
+        return Allies.isAlly(peer, displayName(peer));
+    }
+
+    /**
+     * Marks or unmarks an ally.
+     *
+     * <p>Marking one friends them, since an ally who is not on the friend list is a note nothing
+     * reads. Unmarking leaves the friendship: the opposite of an ally is a plain friend, and the
+     * heart beside this button is how somebody stops being one.
+     */
+    public void toggleAlly(java.util.UUID peer) {
+        String name = displayName(peer);
+        if (Allies.isAlly(peer, name)) {
+            Allies.remove(peer, name);
+            info("%s is a plain friend now.", name);
+            return;
+        }
+
+        boolean wasFriend = isFriend(peer);
+        Allies.add(name, peer);
+        if (wasFriend) info("%s is an ally.", name);
+        else info("%s is an ally, and now a friend.", name);
     }
 
     /**

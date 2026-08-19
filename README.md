@@ -415,6 +415,36 @@ Its colour sits with Meteor's own, in **Config → Visual → `enemy-color`**, r
 follow immediately. Enemies are coloured **in the tab list** too, the way Meteor colours friends
 — which is the one place you look before deciding whether to land.
 
+## Allies
+
+`.ally add <name>`, `remove`, `list`, `clear`, kept in `meteor-client/new-addon/allies.txt` the
+same way the enemy list is: `Name=uuid`, ids learned from the tab list, renames followed.
+
+**An ally is a friend, with a reason.** Not a third relationship — an ally *is* on Meteor's
+friend list, and everything that protects a friend protects them, because that is the point of
+the arrangement. What this list adds is why. A friend is somebody you know; an ally is somebody
+your group has an agreement with, who you may never have spoken to and may not speak to again.
+Both mean do not shoot. They do not mean the same thing when you are deciding whether to say
+where you are.
+
+So `add` friends them as well, and `remove` leaves the friendship — the opposite of an ally is a
+plain friend, not a stranger, and `.friends remove` is how somebody stops being protected.
+Marking an ally takes them off the enemy list, and losing the friendship by any route drops the
+tag, since a tag on somebody who is not a friend is a claim about nothing. Not during a
+FriendBypass, though: that empties the list on purpose and puts it back, which is the one case
+where an ally who is momentarily not a friend is exactly what was meant.
+
+Its colour sits in **Config → Visual → `ally-color`**, beside `friend-color` and `enemy-color`,
+and defaults to the friend green darker. It applies everywhere the friend colour does — the tab
+list, tracers, ESP, nametags, and the message window — and is decided *before* Meteor's own
+friend branch, since otherwise an ally would simply be drawn as a friend and the distinction
+would exist everywhere except where you look at it. A conversation carries a shield beside the
+heart to mark one.
+
+Nothing extra is sent to your other clients, and nothing needs to be: an ally is a friend, so
+FriendSync's ordinary `;friend add` already tells them what they need in order to hold fire. The
+tag itself is local.
+
 ## FriendBypass
 
 KillAura, aim assists and everything else that respects friends will not touch one, which is
