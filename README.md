@@ -61,6 +61,61 @@ idle otherwise. No Baritone dependency at build time (reflection bridge), works 
 If nothing seems to happen, turn `debug` on and read the log line - it tells you exactly
 which check is rejecting everything.
 
+## AutoBreak
+
+Switch it on and **right-click a block**. That block's *kind* becomes the job — not that one
+block — and from then on Baritone walks you to the nearest one and it comes down, the way
+AutoMoss walks to the nearest moss. A kind is picked rather than typed because you are standing
+in front of the thing you want gone, and naming it would mean knowing what it is called. If
+right-clicking it would do something else — a chest, a door, a crafting table — bind `pick-key`
+and look at it instead.
+
+| Setting | Default | |
+| --- | --- | --- |
+| `mode` | SpeedMine | `Vanilla` breaks one at a time; `SpeedMine` starts two and lets both finish. |
+| `pick-key` | none | Takes the block you are looking at, instead of right-clicking it. |
+| `rotate` | off | Turn to face each block. |
+| `swing` | on | Swing your arm; off sends the swing as a packet instead. |
+| `range` | 4.5 | How far a block can be and still be broken. |
+| `hold-ms` | 200 | (SpeedMine) How long to stay on each of the two before switching. |
+| `wait-ms` | 3000 | (SpeedMine) How long to wait for both to come down before starting another pair. |
+| `send-finish` | on | (SpeedMine) Send the stop-breaking message for both once the second is held. |
+| `abort-on-switch` | off | (SpeedMine) Tell the server you gave up on the first. See below. |
+| `walk` | on | Use Baritone to reach the next one. |
+| `walk-radius` | 2 | How close Baritone has to get before this takes over. |
+| `search-chunks` | 8 | How far to look for more. |
+| `y-range` | 32 | How far up or down to consider. |
+| `no-spleef` | on | Never break the block holding you up. |
+| `stop-on-teleport` | on | Switch off when you are moved somewhere you did not walk to. |
+| `teleport-distance` | 16 | How far in one tick counts as being moved rather than walking. |
+
+### SpeedMine
+
+Start breaking one block, and a moment later — a fifth of a second is plenty — start breaking the
+next one, **without ever telling the server you gave up on the first**. Both then come down
+together. It works because the client and the server disagree slightly about how many blocks a
+player can be part-way through, which is also why every timing here is a setting: the numbers
+that work are a property of the server, not of this code.
+
+The point of it is to be doing the same thing as a second client on the other block, so nothing
+**rotates by default** — a player who turns to face each block in turn is doing something
+visibly different from one who does not, and the two clients have to look alike.
+
+`MultiPlayerGameMode.startDestroyBlock` sends an *abort* for the block you were on before
+starting the next one. That is correct for a player and fatal here: the abort is precisely the
+message that throws away the progress the whole thing depends on. So the start and stop packets
+are built directly, through the game's own sequence numbering, and that path is never touched.
+`abort-on-switch` puts the abort back for a server that needs it — it is there to be tried, not
+because it is a good idea.
+
+If nothing comes down after three pairs, it says so once: the cause is almost always the timings
+not suiting the server, or the wrong tool in hand.
+
+**`no-spleef`** refuses any block under your feet, across your whole footprint, since standing on
+the edge of two blocks means either could be the one holding you up. Everything else is fair game
+— a job whose blocks happen to be the floor is common, and the only part of that floor worth
+protecting is the part currently supporting somebody.
+
 ## StasisPull
 
 Asks a stasis bot to pull you home. Pulls are spaced 5s apart client-side.

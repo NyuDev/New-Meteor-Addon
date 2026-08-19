@@ -5,6 +5,7 @@ import fr.nyuway.newaddon.commands.EnemyCommand;
 import fr.nyuway.newaddon.commands.StasisCommand;
 import fr.nyuway.newaddon.commands.TempFriendCommand;
 import fr.nyuway.newaddon.commands.VcCommand;
+import fr.nyuway.newaddon.modules.AutoBreak;
 import fr.nyuway.newaddon.modules.AutoMoss;
 import fr.nyuway.newaddon.modules.AutoStasisPull;
 import fr.nyuway.newaddon.modules.ChatProtect;
@@ -52,6 +53,7 @@ public class NewAddon extends MeteorAddon {
     public void onInitialize() {
         LOG.info("New addon initializing...");
         Modules.get().add(new AutoMoss());
+        Modules.get().add(new AutoBreak());
         Modules.get().add(new StasisPull());
         Modules.get().add(new AutoStasisPull());
         Modules.get().add(new StasisProtection());
