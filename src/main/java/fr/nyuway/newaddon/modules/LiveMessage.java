@@ -511,14 +511,38 @@ public class LiveMessage extends Module {
         store.savePinned(pinned);
     }
 
-    /** Messages from them not looked at yet, for the count beside their name. */
+    /**
+     * Messages from them not looked at yet, for the count beside their name.
+     *
+     * <p>Nothing for somebody ignored. The count is a request for attention, and ignoring
+     * someone is the answer to that request: a yellow number next to a name you have decided
+     * not to read is the one thing an ignore was supposed to stop. Muting is not the same
+     * decision - it turns off the sound and the toast, so the number is all that is left, and
+     * it is the whole reason you would mute rather than ignore.
+     *
+     * <p>The count itself is kept rather than cleared, so un-ignoring somebody gives back what
+     * came in before you did it.
+     */
     public int unread(java.util.UUID peer) {
-        return store.unread(peer);
+        return isIgnored(peer) ? 0 : store.unread(peer);
     }
 
-    /** Everyone with something unread, so the screen can open those conversations by itself. */
+    /**
+     * Everyone whose conversation the screen should open by itself.
+     *
+     * <p>Neither the muted nor the ignored, and for the same reason in two strengths: a window
+     * that appears because somebody wrote to you is a notification, and both of those settings
+     * say do not notify me about this person. Muting still keeps its count - you asked to be
+     * left alone, not to be kept in the dark - it simply waits in the list instead of putting
+     * itself in front of you.
+     */
     public java.util.List<java.util.UUID> unreadPeers() {
-        return store.withUnread();
+        java.util.List<java.util.UUID> out = new java.util.ArrayList<>();
+        for (java.util.UUID peer : store.withUnread()) {
+            if (isMuted(peer) || isIgnored(peer)) continue;
+            out.add(peer);
+        }
+        return out;
     }
 
     /**

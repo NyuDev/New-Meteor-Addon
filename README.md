@@ -271,6 +271,15 @@ not then have to find them. A conversation counts as read when you pick it up, b
 its name, and not when the screen put it there. Every window remembers where it was left and how
 big it was, across restarts.
 
+**Muted and ignored are exempt from both**, in two strengths. A window that appears because
+somebody wrote to you is a notification, and both settings say do not notify me about this
+person — so neither opens by itself any more. Muting keeps its yellow count: you asked to be
+left alone, not to be kept in the dark, so it waits in the list instead of putting itself in
+front of you, which is the whole reason to mute rather than ignore. Ignoring drops the count as
+well — a yellow number beside a name you have decided not to read is the one thing an ignore was
+supposed to stop. The number is kept rather than cleared, so un-ignoring gives back what came in
+before.
+
 There is no flag on the wire saying "this is a whisper" — vanilla renders the line from a
 translation key and every server with its own format sends something else. So detection is by
 pattern, and the patterns are settings: an unrecognised server needs one line added, not a new
