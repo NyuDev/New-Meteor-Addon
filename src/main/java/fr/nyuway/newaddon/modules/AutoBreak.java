@@ -2,7 +2,6 @@ package fr.nyuway.newaddon.modules;
 
 import fr.nyuway.newaddon.NewAddon;
 import fr.nyuway.newaddon.compat.BaritoneBridge;
-import fr.nyuway.newaddon.mixin.GameModeAccessor;
 import fr.nyuway.newaddon.utils.Interactions;
 import fr.nyuway.newaddon.utils.Reach;
 import meteordevelopment.meteorclient.events.render.Render3DEvent;
@@ -23,8 +22,6 @@ import meteordevelopment.meteorclient.utils.render.color.SettingColor;
 import meteordevelopment.meteorclient.utils.world.BlockUtils;
 import meteordevelopment.orbit.EventHandler;
 import net.minecraft.core.BlockPos;
-import net.minecraft.core.Direction;
-import net.minecraft.network.protocol.game.ServerboundPlayerActionPacket;
 import net.minecraft.util.Mth;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
@@ -49,23 +46,20 @@ import java.util.List;
  * <h2>Two ways of breaking</h2>
  * <b>Vanilla</b> is the honest one: face a block, hold the button, wait for it to break, move on.
  *
- * <p><b>SpeedMine</b> is the two-at-a-time trick. You start breaking one block, and a moment
- * later - a fifth of a second is plenty - you start breaking the next one, without ever telling
- * the server you gave up on the first. Both then come down together. It only works because the
- * client and the server disagree slightly about how many blocks a player can be part-way through,
- * which is also why the timings here are all settings: the exact numbers that work are a property
- * of the server, not of this code.
+ * <p><b>SpeedMine</b> works two at a time. It holds the button on one block for a moment - a
+ * fifth of a second is plenty - then on the other, then back, until both come down. That is all
+ * it does: exactly the clicking a person would do, at a speed a person cannot.
  *
- * <p>The whole point of it is to be doing the same thing as a second client on the other block,
- * so nothing here rotates by default. A player who turns to face each block in turn is doing
- * something visibly different from one who does not, and the two clients have to look alike.
+ * <h2>Nothing is sent by hand</h2>
+ * No packets are built here, on purpose. This is the ordinary breaking the game does when you
+ * hold the button, pointed at two blocks in turn - which is the whole point, because the client
+ * working the other block beside you is the one making the pair work, and it is watching for a
+ * player doing an ordinary thing. Anything clever on this side would be a second, different
+ * story for it to make sense of.
  *
- * <h2>Why the packets are sent by hand</h2>
- * {@code MultiPlayerGameMode.startDestroyBlock} sends an <em>abort</em> for the block you were
- * on before starting the next one - which is correct for a player and fatal here, since the
- * abort is precisely the message that throws away the progress the trick depends on. So
- * SpeedMine builds the start and stop packets itself and never touches that path. Vanilla mode
- * goes through Meteor's ordinary breaking, because there it is the right thing.
+ * <p>For the same reason nothing rotates by default. A player who turns to face each block in
+ * turn is doing something visibly different from one who does not, and the two clients have to
+ * look alike.
  */
 public class AutoBreak extends Module {
 
@@ -73,7 +67,7 @@ public class AutoBreak extends Module {
     public enum Mode {
         /** Face it, hold, wait. One block at a time. */
         Vanilla,
-        /** Start one, start the next, let both finish. */
+        /** Hold one, hold the other, back and forth until both come down. */
         SpeedMine
     }
 
@@ -85,9 +79,9 @@ public class AutoBreak extends Module {
 
     private final Setting<Mode> mode = sgGeneral.add(new EnumSetting.Builder<Mode>()
         .name("mode")
-        .description("Vanilla breaks one block at a time and waits for each. SpeedMine starts " +
-                     "two and lets both finish, which is what makes it match a second client " +
-                     "working the other block.")
+        .description("Vanilla breaks one block at a time and waits for each. SpeedMine holds " +
+                     "one then the other, back and forth, so both come down together - which is " +
+                     "what lets a second client work the other block beside you.")
         .defaultValue(Mode.SpeedMine)
         .build());
 
@@ -100,8 +94,8 @@ public class AutoBreak extends Module {
 
     private final Setting<Boolean> rotate = sgGeneral.add(new BoolSetting.Builder()
         .name("rotate")
-        .description("Turn to face each block. Off, because the point of SpeedMine is to look " +
-                     "like the client working beside you, and that one is not turning either.")
+        .description("Turn to face each block. Off, so this looks like the client working " +
+                     "beside you, which is not turning either.")
         .defaultValue(false)
         .build());
 
@@ -127,7 +121,7 @@ public class AutoBreak extends Module {
 
     private final Setting<Boolean> debug = sgGeneral.add(new BoolSetting.Builder()
         .name("debug")
-        .description("Write each phase and each pair to the game log.")
+        .description("Write each pair and each switch to the game log.")
         .defaultValue(false)
         .build());
 
@@ -135,36 +129,19 @@ public class AutoBreak extends Module {
 
     private final Setting<Integer> holdMs = sgSpeed.add(new IntSetting.Builder()
         .name("hold-ms")
-        .description("How long to stay on each of the two blocks before moving to the other. " +
-                     "Long enough for the server to have registered the start; a fifth of a " +
-                     "second is usually plenty, and longer only makes the pair slower.")
+        .description("How long to hold each of the two blocks before switching to the other. " +
+                     "A fifth of a second is usually plenty; longer only makes the pair slower.")
         .defaultValue(200).min(20).max(2000).sliderRange(50, 800)
         .build());
 
     private final Setting<Integer> waitMs = sgSpeed.add(new IntSetting.Builder()
         .name("wait-ms")
-        .description("How long to wait for both blocks to come down before giving up on the pair " +
-                     "and starting another. A pair that never breaks is the sign the timings do " +
-                     "not suit this server.")
+        .description("How long to keep at a pair before giving up on it and starting another. " +
+                     "A pair that never breaks usually means the wrong tool, not the wrong timing.")
         .defaultValue(3000).min(200).max(20000).sliderRange(500, 8000)
         .build());
 
-    private final Setting<Boolean> finish = sgSpeed.add(new BoolSetting.Builder()
-        .name("send-finish")
-        .description("Send the stop-breaking message for both blocks once the second has been " +
-                     "held. Some servers break a block on that message rather than on their own " +
-                     "clock; on the ones that do not, it costs two packets.")
-        .defaultValue(true)
-        .build());
 
-    private final Setting<Boolean> abortOnSwitch = sgSpeed.add(new BoolSetting.Builder()
-        .name("abort-on-switch")
-        .description("Tell the server you gave up on the first block before starting the second, " +
-                     "the way vanilla does. Off, and it has to be: that message is exactly what " +
-                     "throws away the progress this whole mode is built on. Here to be turned on " +
-                     "if a server needs it, not because it is a good idea.")
-        .defaultValue(false)
-        .build());
 
     // --- walking -------------------------------------------------------------
 
@@ -256,10 +233,12 @@ public class AutoBreak extends Module {
     /** Where the two halves of a pair are, and how far through it we are. */
     private BlockPos first;
     private BlockPos second;
-    private Phase phase = Phase.IDLE;
-    private long phaseAt;
+    /** Which half of the pair is being worked, and when that last changed. */
+    private boolean onFirst;
+    private long switchedAt;
 
-    private enum Phase { IDLE, HOLD_FIRST, HOLD_SECOND, WAITING }
+    /** When the pair was started, so one that never comes down does not last for ever. */
+    private long pairAt;
 
     /** Where Baritone is taking us, if anywhere. */
     private BlockPos walkTarget;
@@ -387,161 +366,87 @@ public class AutoBreak extends Module {
     private void tickPair() {
         long now = System.currentTimeMillis();
 
-        switch (phase) {
-            case IDLE -> {
-                first = nearestInReach(null);
-                if (first == null) {
-                    goFind();
-                    return;
-                }
+        // Either half can vanish at any moment - broken by us, by the other client, or by
+        // somebody else entirely - so both are checked before anything is done with them.
+        boolean hadPair = first != null || second != null;
+        if (first != null && !isWanted(first)) first = null;
+        if (second != null && !isWanted(second)) second = null;
 
-                // A second block is wanted but not required: the last one of a job has nobody to
-                // pair with, and refusing to break it would leave the job unfinished.
-                second = nearestInReach(first);
-
-                start(first);
-                phase = Phase.HOLD_FIRST;
-                phaseAt = now;
-                if (debug.get()) log("pair %s + %s", first, second);
+        if (first == null && second == null) {
+            // A pair that empties on its own broke; only the path at the bottom is a giving-up.
+            if (hadPair) {
+                if (debug.get()) log("pair done in %d ms", now - pairAt);
+                timeouts = 0;
             }
 
-            case HOLD_FIRST -> {
-                if (now - phaseAt < holdMs.get()) {
-                    keepGoing(first);
-                    return;
-                }
-
-                if (second == null) {
-                    // Nothing to pair with. Finish this one on its own rather than sitting on it.
-                    if (finish.get()) stop(first);
-                    phase = Phase.WAITING;
-                    phaseAt = now;
-                    return;
-                }
-
-                if (abortOnSwitch.get()) send(ServerboundPlayerActionPacket.Action.ABORT_DESTROY_BLOCK, first);
-                start(second);
-                phase = Phase.HOLD_SECOND;
-                phaseAt = now;
+            first = nearestInReach(null);
+            if (first == null) {
+                goFind();
+                return;
             }
 
-            case HOLD_SECOND -> {
-                if (now - phaseAt < holdMs.get()) {
-                    keepGoing(second);
-                    return;
-                }
-
-                if (finish.get()) {
-                    stop(first);
-                    stop(second);
-                }
-                phase = Phase.WAITING;
-                phaseAt = now;
-            }
-
-            case WAITING -> {
-                boolean firstGone = first == null || !isWanted(first);
-                boolean secondGone = second == null || !isWanted(second);
-
-                if (firstGone && secondGone) {
-                    if (debug.get()) log("pair done in %d ms", now - phaseAt);
-                    timeouts = 0;
-                    clearPair();
-                    return;
-                }
-
-                if (now - phaseAt > waitMs.get()) {
-                    if (debug.get()) log("pair timed out; starting another");
-
-                    // Said out loud eventually. Starting pair after pair that never breaks looks
-                    // identical to working, and the cause is always one of two things a person
-                    // can fix - the timings not suiting the server, or the wrong tool in hand.
-                    if (++timeouts == 3) {
-                        timeouts = 0;
-                        if (notify.get()) {
-                            warning("Nothing is breaking. Try a longer hold-ms, or check your tool.");
-                        }
-                    }
-                    clearPair();
-                }
-            }
+            // A second is wanted but not required. The last block of a job has nobody to pair
+            // with, and refusing to break it would leave the job unfinished.
+            second = nearestInReach(first);
+            onFirst = true;
+            switchedAt = now;
+            pairAt = now;
+            if (debug.get()) log("pair %s + %s", first, second);
         }
+
+        // Time, not ticks. The window this works in is a property of the server's timing, and a
+        // tick is fifty milliseconds - too coarse to aim a fifth of a second with.
+        if (now - switchedAt >= holdMs.get()) {
+            onFirst = !onFirst;
+            switchedAt = now;
+        }
+
+        // Whichever one is still there. Alternating is the whole technique: each block keeps the
+        // progress it had while the other is being worked, and both come down together.
+        BlockPos target = onFirst ? first : second;
+        if (target == null) target = onFirst ? second : first;
+        mine(target);
+
+        if (now - pairAt <= waitMs.get()) return;
+
+        // Long enough. Said out loud eventually, because starting pair after pair that never
+        // breaks looks identical to working, and the cause is always something a person can fix.
+        if (debug.get()) log("pair timed out; starting another");
+        if (++timeouts == 3) {
+            timeouts = 0;
+            if (notify.get()) warning("Nothing is breaking. Check your tool, or try Vanilla mode.");
+        }
+        clearPair();
     }
 
     private void clearPair() {
         first = null;
         second = null;
-        phase = Phase.IDLE;
-        phaseAt = 0;
+        switchedAt = 0;
+        pairAt = 0;
     }
 
     // --- breaking ------------------------------------------------------------
 
     /**
-     * Starts breaking, by hand.
+     * Breaks a block the way the game does when you hold the button on it.
      *
-     * <p>Not {@code MultiPlayerGameMode.startDestroyBlock}: that sends an abort for whatever you
-     * were on before, which is right for a player and is the one message this mode must never
-     * send. The sequence number still comes from the game's own prediction, so the server's
-     * acknowledgements line up as they would for any other block interaction.
+     * <p>Safe to call every tick, and meant to be: breaking is progressive, so this is the
+     * client ticking the same block along a little further. Nothing is sent by hand - the
+     * ordinary path is what a second client is watching for.
      */
-    private void start(BlockPos pos) {
+    private void mine(BlockPos pos) {
         if (pos == null) return;
 
-        if (rotate.get()) {
-            Interactions.lookAt(pos, false, () -> {
-                send(ServerboundPlayerActionPacket.Action.START_DESTROY_BLOCK, pos);
-                swingArm();
-            });
-            return;
-        }
-
-        send(ServerboundPlayerActionPacket.Action.START_DESTROY_BLOCK, pos);
-        swingArm();
+        if (rotate.get()) Interactions.mine(mc, pos, false, swing.get());
+        else BlockUtils.breakBlock(pos, swing.get());
     }
 
-    private void stop(BlockPos pos) {
-        if (pos != null) send(ServerboundPlayerActionPacket.Action.STOP_DESTROY_BLOCK, pos);
-    }
-
-    /** Keeps the arm moving while a block is held, which is all a held button looks like. */
-    private void keepGoing(BlockPos pos) {
-        if (pos != null) swingArm();
-    }
-
-    private void swingArm() {
-        if (mc.player == null) return;
-
-        if (swing.get()) mc.player.swing(net.minecraft.world.InteractionHand.MAIN_HAND);
-        else if (mc.getConnection() != null) {
-            mc.getConnection().send(
-                new net.minecraft.network.protocol.game.ServerboundSwingPacket(
-                    net.minecraft.world.InteractionHand.MAIN_HAND));
-        }
-    }
-
-    private void send(ServerboundPlayerActionPacket.Action action, BlockPos pos) {
-        if (mc.gameMode == null || mc.level == null) return;
-
-        Direction face = BlockUtils.getDirection(pos);
-        BlockPos at = pos.immutable();
-        ((GameModeAccessor) mc.gameMode).newAddon$startPrediction(mc.level,
-            sequence -> new ServerboundPlayerActionPacket(action, at, face, sequence));
-    }
-
-    /** Lets go of whatever was being broken, so switching off does not leave a held button. */
+    /** Lets go, so switching off does not leave the game holding a block down. */
     private void stopBreaking() {
-        if (mc.gameMode == null) return;
-
-        if (mode.get() == Mode.SpeedMine) {
-            if (phase == Phase.HOLD_FIRST || phase == Phase.HOLD_SECOND) {
-                stop(first);
-                stop(second);
-            }
-            return;
-        }
-        mc.gameMode.stopDestroyBlock();
+        if (mc.gameMode != null) mc.gameMode.stopDestroyBlock();
     }
+
 
     // --- finding -------------------------------------------------------------
 

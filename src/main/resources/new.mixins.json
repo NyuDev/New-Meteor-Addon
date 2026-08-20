@@ -7,7 +7,6 @@
 		"AbstractContainerScreenMixin",
 		"BetterTabMixin",
 		"FriendsCommandMixin",
-		"GameModeAccessor",
 		"GuiGraphicsMixin",
 		"AbstractSignEditScreenMixin",
 		"MultiPlayerGameModeMixin",

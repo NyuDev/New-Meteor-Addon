@@ -77,10 +77,8 @@ and look at it instead.
 | `rotate` | off | Turn to face each block. |
 | `swing` | on | Swing your arm; off sends the swing as a packet instead. |
 | `range` | 4.5 | How far a block can be and still be broken. |
-| `hold-ms` | 200 | (SpeedMine) How long to stay on each of the two before switching. |
-| `wait-ms` | 3000 | (SpeedMine) How long to wait for both to come down before starting another pair. |
-| `send-finish` | on | (SpeedMine) Send the stop-breaking message for both once the second is held. |
-| `abort-on-switch` | off | (SpeedMine) Tell the server you gave up on the first. See below. |
+| `hold-ms` | 200 | (SpeedMine) How long to hold each of the two before switching. |
+| `wait-ms` | 3000 | (SpeedMine) How long to keep at a pair before giving up on it. |
 | `walk` | on | Use Baritone to reach the next one. |
 | `walk-radius` | 2 | How close Baritone has to get before this takes over. |
 | `search-chunks` | 8 | How far to look for more. |
@@ -91,25 +89,21 @@ and look at it instead.
 
 ### SpeedMine
 
-Start breaking one block, and a moment later — a fifth of a second is plenty — start breaking the
-next one, **without ever telling the server you gave up on the first**. Both then come down
-together. It works because the client and the server disagree slightly about how many blocks a
-player can be part-way through, which is also why every timing here is a setting: the numbers
-that work are a property of the server, not of this code.
+Hold the button on one block for a moment — a fifth of a second is plenty — then on the other,
+then back, until both come down. That is all it is: exactly the clicking a person would do, at a
+speed a person cannot.
 
-The point of it is to be doing the same thing as a second client on the other block, so nothing
-**rotates by default** — a player who turns to face each block in turn is doing something
-visibly different from one who does not, and the two clients have to look alike.
+**Nothing is sent by hand.** No packets are built, on purpose: this is the ordinary breaking the
+game does when you hold the button, pointed at two blocks in turn. That is the whole point,
+because the client working the other block beside you is what makes the pair work, and it is
+watching for a player doing an ordinary thing. Anything clever on this side would be a second,
+different story for it to make sense of. For the same reason nothing **rotates by default** — a
+player who turns to face each block in turn looks nothing like one who does not, and the two
+clients have to look alike.
 
-`MultiPlayerGameMode.startDestroyBlock` sends an *abort* for the block you were on before
-starting the next one. That is correct for a player and fatal here: the abort is precisely the
-message that throws away the progress the whole thing depends on. So the start and stop packets
-are built directly, through the game's own sequence numbering, and that path is never touched.
-`abort-on-switch` puts the abort back for a server that needs it — it is there to be tried, not
-because it is a good idea.
-
-If nothing comes down after three pairs, it says so once: the cause is almost always the timings
-not suiting the server, or the wrong tool in hand.
+Either half can vanish at any moment — broken by you, by the other client, or by somebody else
+— so both are checked every tick and whichever is left keeps being worked. If nothing comes down
+after three pairs it says so once; that is usually the wrong tool rather than the wrong timing.
 
 **`no-spleef`** refuses any block under your feet, across your whole footprint, since standing on
 the edge of two blocks means either could be the one holding you up. Everything else is fair game
