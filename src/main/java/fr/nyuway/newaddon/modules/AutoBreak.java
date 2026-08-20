@@ -22,6 +22,7 @@ import meteordevelopment.meteorclient.utils.render.color.SettingColor;
 import meteordevelopment.meteorclient.utils.world.BlockUtils;
 import meteordevelopment.orbit.EventHandler;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
 import net.minecraft.util.Mth;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
@@ -47,15 +48,26 @@ import java.util.List;
  * <b>Vanilla</b> is the honest one: face a block, hold the button, wait for it to break, move on.
  *
  * <p><b>SpeedMine</b> works two at a time. It holds the button on one block for a moment - a
- * fifth of a second is plenty - then on the other, then back, until both come down. That is all
- * it does: exactly the clicking a person would do, at a speed a person cannot.
+ * fifth of a second is plenty - then on the other for the same moment, and then <em>stops and
+ * waits</em> for both to come down on their own.
+ *
+ * <h2>The waiting is the technique</h2>
+ * Going back to poke at the blocks is what stops them from ever getting there, so once both have
+ * been started nothing is sent at all until one of two things happens: they break, or they are
+ * overdue. Overdue is worked out from the blocks themselves - the same figure the breaking bar
+ * is filled from, for the tool actually in your hand - plus a margin, because netherrack and
+ * obsidian are the same job to this module and nothing alike to a pickaxe.
  *
  * <h2>Nothing is sent by hand</h2>
- * No packets are built here, on purpose. This is the ordinary breaking the game does when you
- * hold the button, pointed at two blocks in turn - which is the whole point, because the client
- * working the other block beside you is the one making the pair work, and it is watching for a
- * player doing an ordinary thing. Anything clever on this side would be a second, different
- * story for it to make sense of.
+ * No packets are built here, on purpose. These are the game's own two calls, the ones a held
+ * mouse button makes - which is the whole point, because the client working the other block
+ * beside you is what makes the pair work, and it is watching for a player doing an ordinary
+ * thing. Anything clever on this side would be a second, different story for it to make sense of.
+ *
+ * <p>It also cannot go through Meteor's breaking helper, which lets go of a block on the first
+ * tick it is not asked to break it again. That is right for one block at a time and fatal here:
+ * letting go is how you tell the server to forget about a block, and the wait exists precisely
+ * so that it does not.
  *
  * <p>For the same reason nothing rotates by default. A player who turns to face each block in
  * turn is doing something visibly different from one who does not, and the two clients have to
@@ -67,7 +79,7 @@ public class AutoBreak extends Module {
     public enum Mode {
         /** Face it, hold, wait. One block at a time. */
         Vanilla,
-        /** Hold one, hold the other, back and forth until both come down. */
+        /** Hold one, hold the other, then wait for both to come down. */
         SpeedMine
     }
 
@@ -80,7 +92,7 @@ public class AutoBreak extends Module {
     private final Setting<Mode> mode = sgGeneral.add(new EnumSetting.Builder<Mode>()
         .name("mode")
         .description("Vanilla breaks one block at a time and waits for each. SpeedMine holds " +
-                     "one then the other, back and forth, so both come down together - which is " +
+                     "one, then the other, then waits for both to come down together - which is " +
                      "what lets a second client work the other block beside you.")
         .defaultValue(Mode.SpeedMine)
         .build());
@@ -129,16 +141,26 @@ public class AutoBreak extends Module {
 
     private final Setting<Integer> holdMs = sgSpeed.add(new IntSetting.Builder()
         .name("hold-ms")
-        .description("How long to hold each of the two blocks before switching to the other. " +
-                     "A fifth of a second is usually plenty; longer only makes the pair slower.")
+        .description("How long to hold each of the two blocks. A fifth of a second is usually " +
+                     "plenty - it only has to be long enough to have started them.")
         .defaultValue(200).min(20).max(2000).sliderRange(50, 800)
         .build());
 
-    private final Setting<Integer> waitMs = sgSpeed.add(new IntSetting.Builder()
-        .name("wait-ms")
-        .description("How long to keep at a pair before giving up on it and starting another. " +
-                     "A pair that never breaks usually means the wrong tool, not the wrong timing.")
-        .defaultValue(3000).min(200).max(20000).sliderRange(500, 8000)
+    private final Setting<Integer> graceMs = sgSpeed.add(new IntSetting.Builder()
+        .name("grace-ms")
+        .description("How much longer than the block should have taken to give it before " +
+                     "starting another pair. The wait itself is worked out from the block and " +
+                     "the tool in your hand, so this is only the margin on top - latency, and " +
+                     "the moment the server takes to agree.")
+        .defaultValue(500).min(0).max(5000).sliderRange(0, 2000)
+        .build());
+
+    private final Setting<Boolean> release = sgSpeed.add(new BoolSetting.Builder()
+        .name("release")
+        .description("Let go of the button before waiting, the way you would take your finger " +
+                     "off the mouse. Off, because letting go is also how you tell the server to " +
+                     "forget the block, and the whole point of the wait is that it does not.")
+        .defaultValue(false)
         .build());
 
 
@@ -233,12 +255,23 @@ public class AutoBreak extends Module {
     /** Where the two halves of a pair are, and how far through it we are. */
     private BlockPos first;
     private BlockPos second;
-    /** Which half of the pair is being worked, and when that last changed. */
-    private boolean onFirst;
-    private long switchedAt;
+    /** How far through the pair we are, and when that stage began. */
+    private Stage stage = Stage.PICK;
+    private long stageAt;
 
-    /** When the pair was started, so one that never comes down does not last for ever. */
-    private long pairAt;
+    /** When to stop waiting, worked out from how long the blocks should have taken. */
+    private long deadline;
+
+    private enum Stage {
+        /** Nothing in hand: choose two. */
+        PICK,
+        /** Holding the first. */
+        FIRST,
+        /** Holding the second. */
+        SECOND,
+        /** Holding nothing, watching. */
+        WAIT
+    }
 
     /** Where Baritone is taking us, if anywhere. */
     private BlockPos walkTarget;
@@ -368,72 +401,141 @@ public class AutoBreak extends Module {
 
         // Either half can vanish at any moment - broken by us, by the other client, or by
         // somebody else entirely - so both are checked before anything is done with them.
-        boolean hadPair = first != null || second != null;
         if (first != null && !isWanted(first)) first = null;
         if (second != null && !isWanted(second)) second = null;
 
-        if (first == null && second == null) {
-            // A pair that empties on its own broke; only the path at the bottom is a giving-up.
-            if (hadPair) {
-                if (debug.get()) log("pair done in %d ms", now - pairAt);
-                timeouts = 0;
+        switch (stage) {
+            case PICK -> {
+                first = nearestInReach(null);
+                if (first == null) {
+                    goFind();
+                    return;
+                }
+
+                // A second is wanted but not required. The last block of a job has nobody to
+                // pair with, and refusing to break it would leave the job unfinished.
+                second = nearestInReach(first);
+
+                press(first, true);
+                enter(Stage.FIRST, now);
+                if (debug.get()) log("pair %s + %s", first, second);
             }
 
-            first = nearestInReach(null);
-            if (first == null) {
-                goFind();
-                return;
+            case FIRST -> {
+                if (first == null) {
+                    // Gone already - an instamine, or the other client got there first.
+                    startSecond(now);
+                    return;
+                }
+
+                if (now - stageAt < holdMs.get()) {
+                    press(first, false);
+                    return;
+                }
+                startSecond(now);
             }
 
-            // A second is wanted but not required. The last block of a job has nobody to pair
-            // with, and refusing to break it would leave the job unfinished.
-            second = nearestInReach(first);
-            onFirst = true;
-            switchedAt = now;
-            pairAt = now;
-            if (debug.get()) log("pair %s + %s", first, second);
+            case SECOND -> {
+                if (second != null && now - stageAt < holdMs.get()) {
+                    press(second, false);
+                    return;
+                }
+                startWaiting(now);
+            }
+
+            case WAIT -> {
+                // Nothing is sent here, and that is the point. Both blocks have been started and
+                // are counting down on their own; going back to poke at them is what stops them
+                // from ever getting there.
+                if (first == null && second == null) {
+                    if (debug.get()) log("pair done in %d ms", now - stageAt);
+                    timeouts = 0;
+                    clearPair();
+                    return;
+                }
+
+                if (now < deadline) return;
+
+                // Past the time the slower of the two should have taken, plus the margin. Said
+                // out loud eventually, because pair after pair that never breaks looks exactly
+                // like working.
+                if (debug.get()) log("pair overdue by %d ms; starting another", now - deadline);
+                if (++timeouts == 3) {
+                    timeouts = 0;
+                    if (notify.get()) {
+                        warning("Nothing is breaking. Check your tool, or try Vanilla mode.");
+                    }
+                }
+                clearPair();
+            }
+        }
+    }
+
+    /** Moves to the second block, or straight to waiting when the pair is a single. */
+    private void startSecond(long now) {
+        if (second == null) {
+            startWaiting(now);
+            return;
         }
 
-        // Time, not ticks. The window this works in is a property of the server's timing, and a
-        // tick is fifty milliseconds - too coarse to aim a fifth of a second with.
-        if (now - switchedAt >= holdMs.get()) {
-            onFirst = !onFirst;
-            switchedAt = now;
+        press(second, true);
+        enter(Stage.SECOND, now);
+    }
+
+    /**
+     * Stops holding, and works out how long the pair is worth waiting for.
+     *
+     * <p>The wait is the block's own breaking time rather than a number picked in advance:
+     * netherrack and obsidian are the same job to this module and nothing alike to a pickaxe.
+     * The slower of the two decides, since the pair is only done when both are.
+     */
+    private void startWaiting(long now) {
+        if (release.get() && mc.gameMode != null) mc.gameMode.stopDestroyBlock();
+
+        deadline = now + expectedMs() + graceMs.get();
+        enter(Stage.WAIT, now);
+    }
+
+    private void enter(Stage next, long now) {
+        stage = next;
+        stageAt = now;
+    }
+
+    /** How long the slower half of the pair should take, in milliseconds. */
+    private long expectedMs() {
+        long worst = 0;
+
+        for (BlockPos pos : new BlockPos[] { first, second }) {
+            if (pos == null || mc.level == null || mc.player == null) continue;
+
+            // The same figure the breaking bar is filled from: how much of the block one tick of
+            // the tool in hand takes off. Zero means it is not going to break at all, which the
+            // cap below turns into a bounded wait rather than a hang.
+            float perTick = mc.level.getBlockState(pos).getDestroyProgress(mc.player, mc.level, pos);
+            long ms = perTick <= 0 ? MAX_WAIT_MS : (long) Math.ceil(1.0f / perTick) * 50L;
+            worst = Math.max(worst, Math.min(ms, MAX_WAIT_MS));
         }
-
-        // Whichever one is still there. Alternating is the whole technique: each block keeps the
-        // progress it had while the other is being worked, and both come down together.
-        BlockPos target = onFirst ? first : second;
-        if (target == null) target = onFirst ? second : first;
-        mine(target);
-
-        if (now - pairAt <= waitMs.get()) return;
-
-        // Long enough. Said out loud eventually, because starting pair after pair that never
-        // breaks looks identical to working, and the cause is always something a person can fix.
-        if (debug.get()) log("pair timed out; starting another");
-        if (++timeouts == 3) {
-            timeouts = 0;
-            if (notify.get()) warning("Nothing is breaking. Check your tool, or try Vanilla mode.");
-        }
-        clearPair();
+        return worst;
     }
 
     private void clearPair() {
         first = null;
         second = null;
-        switchedAt = 0;
-        pairAt = 0;
+        stage = Stage.PICK;
+        stageAt = 0;
+        deadline = 0;
     }
 
     // --- breaking ------------------------------------------------------------
 
+    /** Longest a single block is ever waited for, so an unbreakable one is not waited for ever. */
+    private static final long MAX_WAIT_MS = 60_000;
+
     /**
-     * Breaks a block the way the game does when you hold the button on it.
+     * Breaks a block the way Vanilla mode does: the same call, every tick, until it gives.
      *
-     * <p>Safe to call every tick, and meant to be: breaking is progressive, so this is the
-     * client ticking the same block along a little further. Nothing is sent by hand - the
-     * ordinary path is what a second client is watching for.
+     * <p>Meteor's helper, which lets go by itself on the first tick this is not called - right
+     * for one block at a time, and the reason SpeedMine cannot use it.
      */
     private void mine(BlockPos pos) {
         if (pos == null) return;
@@ -442,11 +544,34 @@ public class AutoBreak extends Module {
         else BlockUtils.breakBlock(pos, swing.get());
     }
 
+    /**
+     * Presses, or keeps pressing, on a block - the game's own two calls and nothing else.
+     *
+     * @param start true for the first press on a block, false to keep holding it
+     */
+    private void press(BlockPos pos, boolean start) {
+        if (pos == null || mc.gameMode == null || mc.player == null) return;
+
+        Direction face = BlockUtils.getDirection(pos);
+        if (rotate.get()) {
+            Interactions.lookAt(pos, false, () -> hit(pos, face, start));
+            return;
+        }
+        hit(pos, face, start);
+    }
+
+    private void hit(BlockPos pos, Direction face, boolean start) {
+        if (start) mc.gameMode.startDestroyBlock(pos, face);
+        else mc.gameMode.continueDestroyBlock(pos, face);
+
+        // Every tick while the button is down, which is what the game itself does.
+        if (swing.get()) mc.player.swing(net.minecraft.world.InteractionHand.MAIN_HAND);
+    }
+
     /** Lets go, so switching off does not leave the game holding a block down. */
     private void stopBreaking() {
         if (mc.gameMode != null) mc.gameMode.stopDestroyBlock();
     }
-
 
     // --- finding -------------------------------------------------------------
 

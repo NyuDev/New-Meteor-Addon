@@ -77,8 +77,9 @@ and look at it instead.
 | `rotate` | off | Turn to face each block. |
 | `swing` | on | Swing your arm; off sends the swing as a packet instead. |
 | `range` | 4.5 | How far a block can be and still be broken. |
-| `hold-ms` | 200 | (SpeedMine) How long to hold each of the two before switching. |
-| `wait-ms` | 3000 | (SpeedMine) How long to keep at a pair before giving up on it. |
+| `hold-ms` | 200 | (SpeedMine) How long to hold each of the two blocks. |
+| `grace-ms` | 500 | (SpeedMine) Margin on top of the time the block should have taken. |
+| `release` | off | (SpeedMine) Let go of the button before waiting. |
 | `walk` | on | Use Baritone to reach the next one. |
 | `walk-radius` | 2 | How close Baritone has to get before this takes over. |
 | `search-chunks` | 8 | How far to look for more. |
@@ -89,21 +90,30 @@ and look at it instead.
 
 ### SpeedMine
 
-Hold the button on one block for a moment — a fifth of a second is plenty — then on the other,
-then back, until both come down. That is all it is: exactly the clicking a person would do, at a
-speed a person cannot.
+Hold the button on one block for a moment — a fifth of a second is plenty — then on the other for
+the same moment, and then **stop and wait** for both to come down on their own.
 
-**Nothing is sent by hand.** No packets are built, on purpose: this is the ordinary breaking the
-game does when you hold the button, pointed at two blocks in turn. That is the whole point,
-because the client working the other block beside you is what makes the pair work, and it is
-watching for a player doing an ordinary thing. Anything clever on this side would be a second,
-different story for it to make sense of. For the same reason nothing **rotates by default** — a
-player who turns to face each block in turn looks nothing like one who does not, and the two
-clients have to look alike.
+**The waiting is the technique.** Going back to poke at the blocks is what stops them from ever
+getting there, so once both have been started nothing is sent at all until they break or they are
+overdue. Overdue is not a number picked in advance: it is worked out from the blocks themselves —
+the same figure the breaking bar is filled from, for the tool actually in your hand — plus
+`grace-ms` for latency. Netherrack and obsidian are the same job to this module and nothing alike
+to a pickaxe.
 
-Either half can vanish at any moment — broken by you, by the other client, or by somebody else
-— so both are checked every tick and whichever is left keeps being worked. If nothing comes down
-after three pairs it says so once; that is usually the wrong tool rather than the wrong timing.
+**Nothing is sent by hand.** No packets are built, on purpose: these are the game's own two calls,
+the ones a held mouse button makes. That is the whole point, because the client working the other
+block beside you is what makes the pair work, and it is watching for a player doing an ordinary
+thing. For the same reason nothing **rotates by default** — a player who turns to face each block
+in turn looks nothing like one who does not, and the two clients have to look alike.
+
+It also cannot use Meteor's breaking helper, which lets go of a block on the first tick it is not
+asked to break it again. That is right for one block at a time and fatal here: letting go is how
+you tell the server to forget about a block, and the wait exists precisely so that it does not.
+`release` is that letting-go, offered for a server that wants it, and off for the same reason.
+
+Either half can vanish at any moment — broken by you, by the other client, or by somebody else —
+so both are checked every tick. If nothing comes down after three pairs it says so once; that is
+usually the wrong tool rather than the wrong timing.
 
 **`no-spleef`** refuses any block under your feet, across your whole footprint, since standing on
 the edge of two blocks means either could be the one holding you up. Everything else is fair game
