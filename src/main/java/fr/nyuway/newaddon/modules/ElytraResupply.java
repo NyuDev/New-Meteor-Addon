@@ -75,7 +75,10 @@ public class ElytraResupply extends Module {
         REPOSITION,
         /** Coming down on solid ground before the void gets us. */
         VOID_LAND,
-        TAKEOFF, WAIT_DISCONNECT, RESUME
+        TAKEOFF, WAIT_DISCONNECT,
+        /** Counting the supplies again, in case the server disagreed about them. */
+        VERIFY,
+        RESUME
     }
 
     /** Ticks any single phase may take before the run is treated as failed. */
@@ -290,6 +293,7 @@ public class ElytraResupply extends Module {
         loans.clear();
         climbTo = null;
         takeoffFailures = 0;
+        rollbacks = 0;
         repairAvoidance();
         if (!BaritoneBridge.isPresent()) {
             warning("This needs Meteor's Baritone fork; nothing will happen without it.");
@@ -532,6 +536,7 @@ public class ElytraResupply extends Module {
             case VOID_LAND -> voidLand();
             case TAKEOFF -> takeoff();
             case WAIT_DISCONNECT -> waitAndDisconnect();
+            case VERIFY -> verify();
             case SWAP_ELYTRA -> swapElytra();
             case RESUME -> resume();
             default -> { }
@@ -1705,7 +1710,10 @@ public class ElytraResupply extends Module {
             mc.options.keyJump.setDown(false);
             takeoffFailures = 0;
             relaunchTries = 0;
-            to(Phase.RESUME);
+
+            // Airborne, and only now is it worth asking whether the supplies are real. Counting
+            // them on the ground would count a rollback that has not arrived yet.
+            to(Phase.VERIFY);
             return;
         }
 
@@ -1831,6 +1839,59 @@ public class ElytraResupply extends Module {
             log("climbing: y=%.0f, %d ticks in", mc.player.getY(), climbTicks);
         }
     }
+
+    /**
+     * Counts what the run came for, a moment after it finished.
+     *
+     * <h2>Why a second count</h2>
+     * 2b2t rolls an inventory back now and again: the click goes through on the client, the
+     * stack appears, and the server quietly puts it back where it was. Nothing says so. The
+     * client is left believing it has three stacks of fireworks and the server believing it has
+     * none, and the difference only ever shows up as a flight that ends the moment it starts -
+     * an emergency landing seconds after taking off, which is what it looked like.
+     *
+     * <p>So the count is taken again after a pause long enough for a rollback to have arrived,
+     * and if the supplies are not there the run starts over rather than taking off on them. A
+     * second run costs a minute. Taking off without fireworks costs the trip.
+     */
+    private void verify() {
+        if (!cfg.verifySupplies.get()) {
+            to(Phase.RESUME);
+            return;
+        }
+
+        if (phaseTicks < cfg.verifyTicks.get()) return;
+
+        int fireworks = PlayerInv.count(mc, Items.FIREWORK_ROCKET);
+        if (fireworks > cfg.minFireworks.get()) {
+            if (cfg.debug.get()) log("verified %d fireworks", fireworks);
+            to(Phase.RESUME);
+            return;
+        }
+
+        // Not there. Either the server never agreed to the move, or there were none to take -
+        // and the two are told apart by trying again, which is the same answer to both.
+        if (++rollbacks > MAX_ROLLBACKS) {
+            warning("Still only %d fireworks after %d tries; flying on with what there is.",
+                fireworks, MAX_ROLLBACKS);
+            rollbacks = 0;
+            to(Phase.RESUME);
+            return;
+        }
+
+        warning("Only %d fireworks after the run - a rollback, most likely. Going back for more.",
+            fireworks);
+        BlockPos again = resumeTarget;
+        reset();
+        resumeTarget = again;
+        to(Phase.LAND);
+    }
+
+    /** Runs that ended short of supplies in a row, so a genuinely empty shulker is not a loop. */
+    private int rollbacks;
+
+    /** How many of those before it is taken as "there are none" rather than "it did not stick". */
+    private static final int MAX_ROLLBACKS = 2;
 
     private void resume() {
         // Put the pickaxe back where it was found, so the hotbar is left as we got it.

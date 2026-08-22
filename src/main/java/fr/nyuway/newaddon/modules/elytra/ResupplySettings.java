@@ -39,6 +39,8 @@ public final class ResupplySettings {
     public final Setting<Double> arrivalRadius;
     public final Setting<Boolean> voidGuard;
     public final Setting<Integer> voidMargin;
+    public final Setting<Boolean> verifySupplies;
+    public final Setting<Integer> verifyTicks;
     public final Setting<Boolean> autoRelaunch;
     public final Setting<Integer> relaunchDelay;
     public final Setting<Boolean> climb;
@@ -241,6 +243,25 @@ public final class ResupplySettings {
                          "noticing.")
             .defaultValue(32).min(4).max(128).sliderRange(8, 64)
             .visible(voidGuard::get)
+            .build());
+
+        verifySupplies = sgGeneral.add(new BoolSetting.Builder()
+            .name("verify-supplies")
+            .description("Count the fireworks again a moment after the run finishes, and go " +
+                         "back for more if they are not there. 2b2t rolls an inventory back now " +
+                         "and again: the client shows the stack it took, the server never " +
+                         "agreed, and the difference only shows up as a flight that ends the " +
+                         "moment it starts.")
+            .defaultValue(true)
+            .build());
+
+        verifyTicks = sgGeneral.add(new IntSetting.Builder()
+            .name("verify-ticks")
+            .description("How long to wait before that second count. Long enough for a rollback " +
+                         "to have arrived - it comes as an ordinary inventory update, a round " +
+                         "trip after the click that caused it.")
+            .defaultValue(40).min(5).max(200).sliderRange(10, 100)
+            .visible(verifySupplies::get)
             .build());
 
         autoRelaunch = sgGeneral.add(new BoolSetting.Builder()

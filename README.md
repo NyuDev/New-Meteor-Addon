@@ -940,6 +940,20 @@ be collected), so this is a state machine with a timeout per phase. On any timeo
 its cleanup path rather than stopping where it is, so a failure does not leave your ender
 chest sitting in the open.
 
+### Counting the supplies twice
+
+2b2t rolls an inventory back now and again: the click goes through on the client, the stack
+appears, and the server quietly puts it back. Nothing says so. The client is left believing it has
+three stacks of fireworks and the server believing it has none, and the difference only ever shows
+up as a flight that ends the moment it starts.
+
+So `verify-supplies` counts again once airborne, after `verify-ticks` — long enough for a rollback
+to have arrived, it being an ordinary inventory update a round trip after the click that caused it.
+If the fireworks are not there the run starts over instead of taking off on them. A second run
+costs a minute; taking off without fireworks costs the trip. Two attempts, then it flies on with
+what there is, because "the server disagreed" and "the shulker was empty" look identical from here
+and only trying tells them apart.
+
 ### Climbing back to cruising height
 
 Baritone's elytra process gains altitude when it is handed its destination afresh: it plans the
