@@ -3,6 +3,7 @@ package fr.nyuway.newaddon.modules;
 import fr.nyuway.newaddon.NewAddon;
 import fr.nyuway.newaddon.compat.BaritoneBridge;
 import fr.nyuway.newaddon.utils.Interactions;
+import fr.nyuway.newaddon.utils.PlayerInv;
 import fr.nyuway.newaddon.utils.Reach;
 import fr.nyuway.newaddon.utils.Unstuck;
 import meteordevelopment.meteorclient.events.render.Render3DEvent;
@@ -19,6 +20,8 @@ import meteordevelopment.meteorclient.settings.Setting;
 import meteordevelopment.meteorclient.settings.SettingGroup;
 import meteordevelopment.meteorclient.systems.modules.Module;
 import meteordevelopment.meteorclient.utils.misc.Keybind;
+import meteordevelopment.meteorclient.utils.player.FindItemResult;
+import meteordevelopment.meteorclient.utils.player.InvUtils;
 import meteordevelopment.meteorclient.utils.player.Rotations;
 import meteordevelopment.meteorclient.utils.render.color.SettingColor;
 import meteordevelopment.meteorclient.utils.world.BlockUtils;
@@ -29,6 +32,7 @@ import net.minecraft.util.Mth;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.monster.Enemy;
+import net.minecraft.world.item.Items;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
@@ -97,6 +101,7 @@ public class AutoBreak extends Module {
     private final SettingGroup sgSpeed = settings.createGroup("Speed mine");
     private final SettingGroup sgWalk = settings.createGroup("Walking");
     private final SettingGroup sgFight = settings.createGroup("Combat");
+    private final SettingGroup sgReplace = settings.createGroup("Replace");
     private final SettingGroup sgSafety = settings.createGroup("Safety");
     private final SettingGroup sgRender = settings.createGroup("Render");
 
@@ -301,6 +306,25 @@ public class AutoBreak extends Module {
         .defaultValue(true)
         .build());
 
+    // --- replace ---------------------------------------------------------------
+
+    private final Setting<Boolean> replace = sgReplace.add(new BoolSetting.Builder()
+        .name("replace")
+        .description("Put obsidian back in the hole. What a job like this is usually for: the " +
+                     "blocks coming out are somebody else's, and what goes back has to be worth " +
+                     "more to break than it was worth to place.")
+        .defaultValue(false)
+        .build());
+
+    private final Setting<Boolean> waitForSupply = sgReplace.add(new BoolSetting.Builder()
+        .name("wait-for-supply")
+        .description("Stop mining when the obsidian runs out rather than carrying on and " +
+                     "leaving holes. ObsidianSupply is what fills the gap; this is what stops " +
+                     "the job running ahead of it.")
+        .defaultValue(true)
+        .visible(replace::get)
+        .build());
+
     // --- combat ----------------------------------------------------------------
 
     private final Setting<Boolean> fightBack = sgFight.add(new BoolSetting.Builder()
@@ -466,6 +490,12 @@ public class AutoBreak extends Module {
         WAIT
     }
 
+    /** Holes waiting for obsidian, oldest first. */
+    private final java.util.ArrayDeque<BlockPos> holes = new java.util.ArrayDeque<>();
+
+    /** What was last said about waiting, so it is said once rather than every tick. */
+    private boolean saidWaiting;
+
     /** Where Baritone is taking us, if anywhere. */
     private BlockPos walkTarget;
 
@@ -538,6 +568,8 @@ public class AutoBreak extends Module {
         // Learned per run, not remembered. The block and the tool are both likely to be
         // different next time, and a hold learned for obsidian is nonsense for netherrack.
         holdNow = holdMs.get();
+        holes.clear();
+        saidWaiting = false;
         tries = 0;
         cleanPairs = 0;
         halfPairs = 0;
@@ -713,11 +745,25 @@ public class AutoBreak extends Module {
             return;
         }
 
+        if (outOfObsidian()) {
+            letGo();
+            if (notify.get() && !saidWaiting) {
+                saidWaiting = true;
+                warning("Out of obsidian; waiting rather than leaving holes.");
+            }
+            return;
+        }
+        saidWaiting = false;
+
         if (nothingIsHappening()) return;
 
         // Not while Baritone has the controls. Walking is what takes a block out of reach half
         // way through a pair, and it is what puts your feet over a hole you started yourself -
         // both of which were being blamed on the mining. Stand still, break, move on.
+        // Before anything else. A hole in the floor is worth more attention than the next
+        // block, and one left behind while the job walks off is a hole that stays.
+        if (fillHoles()) return;
+
         if (digging()) return;
 
         if (!mineWhileWalking.get() && BaritoneBridge.isPathing()) {
@@ -838,6 +884,67 @@ public class AutoBreak extends Module {
         clearPair();
     }
 
+    // --- putting it back ---------------------------------------------------------
+
+    /**
+     * Puts obsidian into the oldest hole this job made, if one is within reach.
+     *
+     * <p>Holes are remembered rather than looked for. Scanning for air where a block used to be
+     * cannot tell our hole from a hole that was already there, and filling somebody else's is
+     * both wasteful and rude. A hole that has drifted out of reach is dropped rather than
+     * queued: holding everything up for one square stops the job, and the job will come past
+     * again.
+     *
+     * @return true when this tick was spent on a hole
+     */
+    private boolean fillHoles() {
+        if (!replace.get() || holes.isEmpty()) return false;
+
+        while (!holes.isEmpty()) {
+            BlockPos hole = holes.peek();
+
+            // Filled already, by us or by anybody; or somewhere we are standing, which is a way
+            // of burying yourself that nobody enjoys.
+            if (!mc.level.getBlockState(hole).isAir()
+                || mc.player.getBoundingBox().intersects(new AABB(hole))
+                || !Reach.canReach(mc, hole, false, range.get())) {
+                holes.poll();
+                continue;
+            }
+
+            FindItemResult obsidian = InvUtils.findInHotbar(Items.OBSIDIAN);
+            if (!obsidian.found()) {
+                PlayerInv.moveToHotbar(mc, stack -> stack.is(Items.OBSIDIAN));
+                return true;
+            }
+
+            Interactions.place(hole, obsidian, rotate.get(), false, swing.get(), false);
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * Writes down a hole this job made, so it can be filled back in.
+     *
+     * <p>Only when it is actually a hole. A block that stopped being ours because it drifted out
+     * of reach is still standing there, and remembering that as a hole would have the module
+     * putting obsidian on top of the very thing it came to remove.
+     */
+    private void noteHole(BlockPos pos) {
+        if (!replace.get() || pos == null || mc.level == null) return;
+        if (!mc.level.getBlockState(pos).isAir()) return;
+        if (holes.contains(pos)) return;
+
+        holes.add(pos.immutable());
+        while (holes.size() > 32) holes.poll();
+    }
+
+    /** Whether there is nothing to put back, when putting it back is the point. */
+    private boolean outOfObsidian() {
+        return replace.get() && waitForSupply.get() && PlayerInv.count(mc, Items.OBSIDIAN) == 0;
+    }
+
     // --- fighting --------------------------------------------------------------
 
     /**
@@ -920,7 +1027,10 @@ public class AutoBreak extends Module {
 
     /** One block, faced and held until it breaks, then the next. */
     private void tickOne() {
-        if (first != null && !workable(first)) first = null;
+        if (first != null && !workable(first)) {
+            noteHole(first);
+            first = null;
+        }
         if (first == null) first = nearestInReach(null);
 
         if (first == null) {
@@ -953,8 +1063,14 @@ public class AutoBreak extends Module {
         // somebody else, or simply left behind by a step - so both are checked before anything
         // is done with them. Out of reach counts: insisting on a block the server will not
         // accept is not persistence, it is a stall.
-        if (first != null && !workable(first)) first = null;
-        if (second != null && !workable(second)) second = null;
+        if (first != null && !workable(first)) {
+            noteHole(first);
+            first = null;
+        }
+        if (second != null && !workable(second)) {
+            noteHole(second);
+            second = null;
+        }
 
         // Nothing left in hand part way through. Start over rather than carrying an empty pair
         // through the rest of the cycle, which used to sit in WAIT until it timed out.
@@ -1452,6 +1568,17 @@ public class AutoBreak extends Module {
         stillTicks = 0;
         routeAt = now;
         stillAt = mc.player.position();
+
+        // Beside it, not on it. A radius goal is happy to put you standing on the block you came
+        // to break, and from there the only way to break it is to spleef yourself - so the goal
+        // is a specific square next to it, at the height the job is on.
+        BlockPos stand = standingSpot(nearest);
+        if (stand != null) {
+            BaritoneBridge.pathTo(stand, 0);
+            if (debug.get()) log("walking to %s, standing at %s", nearest, stand);
+            return;
+        }
+
         BaritoneBridge.pathTo(nearest, walkRadius.get());
         if (debug.get()) log("walking to %s%s", nearest, bestPairs ? " (pairable)" : " (alone)");
     }
@@ -1491,6 +1618,62 @@ public class AutoBreak extends Module {
             return false;
         }
         return ++stillTicks > stuckTicks.get();
+    }
+
+    /**
+     * Somewhere to stand to work on a block: beside it, and on the layer.
+     *
+     * <p>Standing on the target is the trap. A goal with a radius will happily satisfy itself by
+     * putting you on top of the very block you came to break, and from there the only way to
+     * break it is to take the floor out from under yourself - which is how the spleefing kept
+     * happening even with the guard on, since the guard's answer is to refuse the block and the
+     * job then has nothing to do.
+     *
+     * <p>So the goal is one square, chosen from the eight around the target: room for a player,
+     * something to stand on that is not the target itself, and as near the working height as can
+     * be had. Falling back to null lets the caller use its old radius goal, which is better than
+     * refusing to go anywhere.
+     */
+    private BlockPos standingSpot(BlockPos target) {
+        if (mc.level == null) return null;
+
+        BlockPos best = null;
+        int bestScore = Integer.MAX_VALUE;
+
+        for (int dx = -1; dx <= 1; dx++) {
+            for (int dz = -1; dz <= 1; dz++) {
+                if (dx == 0 && dz == 0) continue;
+
+                // Level with the block, and a step either side of it. The layer is flat, so
+                // level is nearly always the answer and the other two are for its edges.
+                for (int dy = 0; dy >= -1; dy--) {
+                    BlockPos feet = target.offset(dx, dy, dz);
+                    if (!standable(feet, target)) continue;
+
+                    // Nearest the working height wins, then nearest the block; a diagonal is
+                    // half a block further away and reaches just as well.
+                    int off = workY == null ? 0 : Math.abs(feet.getY() - (workY + 1));
+                    int score = off * 8 + Math.abs(dx) + Math.abs(dz);
+                    if (score >= bestScore) continue;
+
+                    bestScore = score;
+                    best = feet;
+                }
+            }
+        }
+        return best;
+    }
+
+    /** Room for a player here, with something under them that is not the block being broken. */
+    private boolean standable(BlockPos feet, BlockPos target) {
+        if (feet.equals(target) || feet.above().equals(target)) return false;
+
+        BlockPos floor = feet.below();
+        if (floor.equals(target)) return false;
+
+        return mc.level.getBlockState(feet).isAir()
+            && mc.level.getBlockState(feet.above()).isAir()
+            && !mc.level.getBlockState(floor).isAir();
     }
 
     /**

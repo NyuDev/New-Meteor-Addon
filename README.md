@@ -93,6 +93,8 @@ and look at it instead.
 | `stuck-ticks` | 60 | Ticks of pathing without moving before the route is given up on. |
 | `allow-place` | on | Lend Baritone placing, parkour, and the blocks in your pack. |
 | `dig-out` | on | Mine towards the next block when no route exists at all. |
+| `replace` | off | Put obsidian back in the hole. |
+| `wait-for-supply` | on | Stop mining when the obsidian runs out. |
 | `search-chunks` | 8 | How far to look for more. |
 | `y-range` | 4 | How far above or below the working layer to consider. |
 | `fight-back` | on | Hit hostile mobs that come within reach. |
@@ -200,6 +202,28 @@ down** and the current targets are set aside, the route is dropped, and it looks
 Every individual failure has its own way out; this is the one that catches the combinations
 nobody thought of.
 
+### Putting it back
+
+**`replace`** fills each hole with obsidian. The holes are *remembered*, not looked for: scanning
+for air where a block used to be cannot tell our hole from one that was already there, and filling
+somebody else's is wasteful and rude. The oldest reachable hole is filled first, one already
+filled is forgotten, and a hole you are standing in is skipped — burying yourself is a way to end
+a job that nobody enjoys. A hole that drifted out of reach is dropped rather than queued; the job
+comes past again.
+
+**`wait-for-supply`** stops mining when the obsidian runs out, rather than carrying on and leaving
+holes. ObsidianSupply fills the gap; this is what stops the job running ahead of it.
+
+### Standing beside the block, never on it
+
+A radius goal will happily satisfy itself by putting you **on top of** the block you came to
+break, and from there the only way to break it is to take the floor out from under yourself — so
+the spleefing kept happening even with the guard on, because the guard's answer is to refuse the
+block and then the job has nothing to do. The goal is now one specific square chosen from the
+eight around the target: room for a player, something to stand on that is not the target, and as
+near the working height as can be had. Only if there is no such square does it fall back to the
+old radius goal, which is better than refusing to go anywhere.
+
 ### When there is no route at all
 
 Baritone's log said it: `198 movements considered`, `Open set size: 0`, `PathNode map size: 9`.
@@ -257,6 +281,36 @@ by default because leaving is a decision. The damage source arrives from the ser
 itself, so this is what actually hit you rather than a guess from who happens to be standing
 about. Mobs deliberately do not count — a creeper is not a reason to lose your place, and
 fight-back is the answer to those.
+
+## ObsidianSupply
+
+An ender chest broken **without** Silk Touch drops eight obsidian, and an ender chest is the one
+container that follows you everywhere. So the supply chain is a circle that never needs a base:
+place a chest, break it with the wrong pickaxe on purpose, pick up eight obsidian, do it again.
+Eight at a time is not much, and it is available at the bottom of the world with nothing else in
+sight, which is the point.
+
+| Setting | Default | |
+| --- | --- | --- |
+| `auto-obsidian` / `min-obsidian` / `target-obsidian` | on / 32 / 128 | Make more when it runs low, and how much to carry. |
+| `auto-chests` / `min-chests` / `target-chests` | on / 8 / 64 | Fetch more ender chests, and how many to carry. |
+| `refill-obsidian` / `refill-chests` | none | Do either now, whatever the counts say. |
+
+**The pickaxe is checked before every chest.** Silk Touch is exactly the wrong tool here — it
+gives the chest back rather than the obsidian, so the loop would run for ever turning one chest
+into one chest. It is identified by how fast it would break an ender chest rather than by its
+class, since tools stopped being classes part way through the supported versions.
+
+When the chests themselves run out, the ender chest is where the next ones are — **loose** if you
+keep them loose, or **in a shulker** if you keep them tidily. Both are handled, and the shulker
+goes back in the ender chest afterwards: a shulker of ender chests left on the ground is the whole
+trip's supply left on the ground, and this module exists because there is nowhere to go and get
+more. `min-chests` is kept well above zero on purpose — fetching needs a chest to place and open,
+so hitting zero is a hole you cannot climb out of.
+
+Everything placed is picked up again, nothing is placed while the last drop is still on the
+ground, and every click is paced, because a burst of them on 2b2t costs the connection rather than
+the inventory.
 
 ## StasisPull
 
