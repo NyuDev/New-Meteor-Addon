@@ -77,7 +77,11 @@ and look at it instead.
 | `rotate` | off | Turn to face each block. |
 | `swing` | on | Swing your arm; off sends the swing as a packet instead. |
 | `range` | 4.5 | How far a block can be and still be broken. |
-| `hold-ms` | 200 | (SpeedMine) How long to hold each of the two blocks. |
+| `hold-ms` | 1000 | (SpeedMine) How long to hold each of the two blocks, to start with. |
+| `adapt` | on | (SpeedMine) Learn the hold from whether pairs come down. |
+| `max-hold-ms` | 6000 | (SpeedMine) As far as the hold may grow. |
+| `retries` | 2 | (SpeedMine) Attempts on the same blocks before picking another pair. |
+| `solo-fallback` | on | (SpeedMine) Finish one at a time when pairing keeps half-working. |
 | `first-clicks` | 2 | (SpeedMine) How many times to click the first block. |
 | `click-gap-ms` | 50 | (SpeedMine) Time between those clicks. |
 | `grace-ms` | 500 | (SpeedMine) Margin on top of the time the block should have taken. |
@@ -119,8 +123,25 @@ you tell the server to forget about a block, and the wait exists precisely so th
 `release` is that letting-go, offered for a server that wants it, and off for the same reason.
 
 Either half can vanish at any moment — broken by you, by the other client, or by somebody else —
-so both are checked every tick. If nothing comes down after three pairs it says so once; that is
-usually the wrong tool rather than the wrong timing.
+so both are checked every tick.
+
+**The hold is learned, not guessed.** A fifth of a second is enough to have begun a block and
+nowhere near enough for crying obsidian, and the number that works depends on the block, the tool
+and the server — three things the module can find out and you would have to guess. So a pair that
+does not fully come down **doubles** the hold, which finds the right order of magnitude in a few
+pairs rather than creeping towards it, and three clean pairs in a row ease it back down, since the
+shortest hold that works is also the fastest. `max-hold-ms` is as far as it goes. The current
+value shows next to the module name.
+
+A pair that runs out of time is **started again on whatever is left** rather than abandoned —
+picking a fresh pair there would usually pick the same blocks anyway, only having forgotten how
+many attempts they had already had. `retries` is how many times before moving on.
+
+**One out of two is watched separately.** That is not a hold slightly too short; it is the pair
+being answered one block at a time, and no amount of waiting fixes it. When the hold has grown as
+far as it goes and pairs are still half-breaking, `solo-fallback` stops pairing and finishes them
+one at a time — half a pair over and over is the trick not working, and one block at a time still
+clears the job.
 
 **`no-spleef`** refuses any block under your feet, across your whole footprint, since standing on
 the edge of two blocks means either could be the one holding you up. Everything else is fair game

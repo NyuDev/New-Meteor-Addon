@@ -146,9 +146,43 @@ public class AutoBreak extends Module {
 
     private final Setting<Integer> holdMs = sgSpeed.add(new IntSetting.Builder()
         .name("hold-ms")
-        .description("How long to hold each of the two blocks. A fifth of a second is usually " +
-                     "plenty - it only has to be long enough to have started them.")
-        .defaultValue(200).min(20).max(2000).sliderRange(50, 800)
+        .description("How long to hold each of the two blocks. Where to start, rather than the " +
+                     "final word: a fifth of a second is enough to have begun a block and " +
+                     "nowhere near enough for crying obsidian, so this is raised on its own " +
+                     "when pairs do not come down.")
+        .defaultValue(1000).min(20).max(20000).sliderRange(200, 4000)
+        .build());
+
+    private final Setting<Boolean> adapt = sgSpeed.add(new BoolSetting.Builder()
+        .name("adapt")
+        .description("Learn the hold from what happens. A pair that does not fully come down " +
+                     "doubles it; three clean pairs in a row ease it back down. The right number " +
+                     "depends on the block, the tool and the server, which is three things this " +
+                     "can find out and you would have to guess.")
+        .defaultValue(true)
+        .build());
+
+    private final Setting<Integer> maxHoldMs = sgSpeed.add(new IntSetting.Builder()
+        .name("max-hold-ms")
+        .description("As far as the hold is allowed to grow.")
+        .defaultValue(6000).min(200).max(30000).sliderRange(1000, 12000)
+        .visible(adapt::get)
+        .build());
+
+    private final Setting<Integer> retries = sgSpeed.add(new IntSetting.Builder()
+        .name("retries")
+        .description("How many times to start the same blocks again when they do not come down " +
+                     "in time, before giving up on them and picking another pair.")
+        .defaultValue(2).min(0).max(10).sliderRange(0, 5)
+        .build());
+
+    private final Setting<Boolean> soloFallback = sgSpeed.add(new BoolSetting.Builder()
+        .name("solo-fallback")
+        .description("When the hold has grown as far as it goes and the pairs are still coming " +
+                     "down one block out of two, stop pairing and finish them one at a time. " +
+                     "Half a pair is not the trick working badly, it is the trick not working - " +
+                     "and one block at a time still clears the job.")
+        .defaultValue(true)
         .build());
 
     private final Setting<Integer> firstClicks = sgSpeed.add(new IntSetting.Builder()
@@ -287,6 +321,19 @@ public class AutoBreak extends Module {
     private int clicks;
     private long clickedAt;
 
+    /** The hold actually in use, which starts at the setting and is learned from there. */
+    private int holdNow;
+
+    /** Attempts spent on the pair in hand, and clean pairs in a row, for the adapting. */
+    private int tries;
+    private int cleanPairs;
+
+    /** Pairs that came down one block out of two, which is the sign pairing is not working. */
+    private int halfPairs;
+
+    /** True once the pairing has been given up on for this run. */
+    private boolean solo;
+
     private enum Stage {
         /** Nothing in hand: choose two. */
         PICK,
@@ -306,9 +353,6 @@ public class AutoBreak extends Module {
 
     private boolean pickHeld;
 
-    /** Consecutive pairs that ran out of patience, so the reason gets said rather than repeated. */
-    private int timeouts;
-
     /** When Baritone's scanner was last asked, so it is not asked twenty times a second. */
     private long lastScan;
 
@@ -320,7 +364,13 @@ public class AutoBreak extends Module {
     @Override
     public String getInfoString() {
         if (wanted == null) return "pick one";
-        return wanted.getName().getString();
+
+        String name = wanted.getName().getString();
+        if (mode.get() != Mode.SpeedMine) return name;
+        if (solo) return name + " (solo)";
+
+        // The learned hold, in the module list, so the adapting is visible without the log.
+        return name + " " + hold() + "ms";
     }
 
     @Override
@@ -330,8 +380,15 @@ public class AutoBreak extends Module {
         walkTarget = null;
         lastPos = mc.player == null ? null : mc.player.position();
         pickHeld = false;
-        timeouts = 0;
         lastScan = 0;
+
+        // Learned per run, not remembered. The block and the tool are both likely to be
+        // different next time, and a hold learned for obsidian is nonsense for netherrack.
+        holdNow = holdMs.get();
+        tries = 0;
+        cleanPairs = 0;
+        halfPairs = 0;
+        solo = false;
 
         if (notify.get()) {
             info("Right-click the block you want gone, or bind pick-key and look at it.");
@@ -422,6 +479,13 @@ public class AutoBreak extends Module {
      * aim with.
      */
     private void tickPair() {
+        // Given up on pairing for this run: one at a time still clears the job, and half a pair
+        // over and over does not.
+        if (solo) {
+            tickOne();
+            return;
+        }
+
         long now = System.currentTimeMillis();
 
         // Either half can vanish at any moment - broken by us, by the other client, or by
@@ -440,12 +504,9 @@ public class AutoBreak extends Module {
                 // A second is wanted but not required. The last block of a job has nobody to
                 // pair with, and refusing to break it would leave the job unfinished.
                 second = nearestInReach(first);
-
-                press(first, true);
-                clicks = 1;
-                clickedAt = now;
-                enter(Stage.FIRST, now);
-                if (debug.get()) log("pair %s + %s", first, second);
+                tries = 0;
+                begin(now);
+                if (debug.get()) log("pair %s + %s, hold %d ms", first, second, hold());
             }
 
             case FIRST -> {
@@ -467,7 +528,7 @@ public class AutoBreak extends Module {
                     return;
                 }
 
-                if (now - stageAt < holdMs.get()) {
+                if (now - stageAt < hold()) {
                     press(first, false);
                     return;
                 }
@@ -475,7 +536,7 @@ public class AutoBreak extends Module {
             }
 
             case SECOND -> {
-                if (second != null && now - stageAt < holdMs.get()) {
+                if (second != null && now - stageAt < hold()) {
                     press(second, false);
                     return;
                 }
@@ -488,24 +549,95 @@ public class AutoBreak extends Module {
                 // from ever getting there.
                 if (first == null && second == null) {
                     if (debug.get()) log("pair done in %d ms", now - stageAt);
-                    timeouts = 0;
+                    settle(2);
                     clearPair();
                     return;
                 }
 
                 if (now < deadline) return;
 
-                // Past the time the slower of the two should have taken, plus the margin. Said
-                // out loud eventually, because pair after pair that never breaks looks exactly
-                // like working.
-                if (debug.get()) log("pair overdue by %d ms; starting another", now - deadline);
-                if (++timeouts == 3) {
-                    timeouts = 0;
-                    if (notify.get()) {
-                        warning("Nothing is breaking. Check your tool, or try Vanilla mode.");
+                // Past the time the slower of the two should have taken, plus the margin.
+                int broke = (first == null ? 1 : 0) + (second == null ? 1 : 0);
+                if (debug.get()) log("pair overdue, %d of 2 down, try %d", broke, tries + 1);
+                settle(broke);
+
+                // Again on what is left, rather than walking away from a block that is half
+                // mined. Picking a fresh pair here would usually pick the same blocks anyway,
+                // only having forgotten how many attempts they have already had.
+                if (++tries <= retries.get()) {
+                    BlockPos left = first != null ? first : second;
+                    if (left != null) {
+                        first = left;
+                        second = nearestInReach(left);
+                        begin(now);
+                        return;
                     }
                 }
                 clearPair();
+            }
+        }
+    }
+
+    /** Starts the pair: first click on the first block, and the clock running. */
+    private void begin(long now) {
+        press(first, true);
+        clicks = 1;
+        clickedAt = now;
+        enter(Stage.FIRST, now);
+    }
+
+    /** The hold in force, which is the setting until something is learned from it. */
+    private int hold() {
+        if (holdNow < holdMs.get()) holdNow = holdMs.get();
+        return holdNow;
+    }
+
+    /**
+     * Takes in how a pair ended and changes the hold accordingly.
+     *
+     * <p>Two out of two is the hold being long enough, and three of those in a row ease it back
+     * down - the shortest hold that works is also the fastest. Anything less doubles it, because
+     * the usual reason a pair does not come down is that it was not held long enough to have
+     * really started, and doubling finds the right order of magnitude in a few pairs rather than
+     * creeping towards it.
+     *
+     * <p>One out of two is watched separately. It is not a hold that is slightly too short: it
+     * is the pair being answered one block at a time, and no amount of waiting fixes that.
+     */
+    private void settle(int broke) {
+        if (broke == 1) halfPairs++;
+        else if (broke == 2) halfPairs = 0;
+
+        if (!adapt.get()) return;
+
+        if (broke == 2) {
+            tries = 0;
+            if (++cleanPairs < 3) return;
+
+            cleanPairs = 0;
+            int eased = Math.max(holdMs.get(), hold() * 3 / 4);
+            if (eased == holdNow) return;
+
+            holdNow = eased;
+            if (debug.get()) log("three clean pairs; hold down to %d ms", holdNow);
+            return;
+        }
+
+        cleanPairs = 0;
+
+        int grown = Math.min(maxHoldMs.get(), hold() * 2);
+        if (grown != holdNow) {
+            holdNow = grown;
+            if (notify.get()) info("Holding each block %d ms now.", holdNow);
+            return;
+        }
+
+        // As long as the hold is allowed to get, and still half a pair every time. More waiting
+        // is not the answer to that, so stop pairing and clear the job one block at a time.
+        if (soloFallback.get() && halfPairs >= 3 && !solo) {
+            solo = true;
+            if (notify.get()) {
+                warning("Only one of every two is coming down; finishing them one at a time.");
             }
         }
     }
@@ -531,7 +663,10 @@ public class AutoBreak extends Module {
     private void startWaiting(long now) {
         if (release.get() && mc.gameMode != null) mc.gameMode.stopDestroyBlock();
 
-        deadline = now + expectedMs() + graceMs.get();
+        // The blocks' own breaking time, plus the margin, and never less than the two holds
+        // just spent on them - a wait shorter than the work is a pair given up on before it
+        // could have finished.
+        deadline = now + Math.max(expectedMs(), 2L * hold()) + graceMs.get();
         enter(Stage.WAIT, now);
     }
 
@@ -565,6 +700,7 @@ public class AutoBreak extends Module {
         deadline = 0;
         clicks = 0;
         clickedAt = 0;
+        tries = 0;
     }
 
     // --- breaking ------------------------------------------------------------
