@@ -87,9 +87,17 @@ and look at it instead.
 | `grace-ms` | 500 | (SpeedMine) Margin on top of the time the block should have taken. |
 | `release` | off | (SpeedMine) Let go of the button before waiting. |
 | `walk` | on | Use Baritone to reach the next one. |
-| `walk-radius` | 2 | How close Baritone has to get before this takes over. |
+| `walk-radius` | 1 | How close Baritone has to get before this takes over. |
+| `pair-first` | on | Prefer a block that has another of its kind beside it. |
+| `stuck-ticks` | 60 | Ticks of pathing without moving before the route is given up on. |
+| `allow-place` | on | Let Baritone place blocks to get somewhere, restored on switch-off. |
 | `search-chunks` | 8 | How far to look for more. |
 | `y-range` | 32 | How far up or down to consider. |
+| `fight-back` | on | Hit hostile mobs that come within reach. |
+| `fight-range` | 5 | How close one has to be to be worth turning on. |
+| `pause-while-fighting` | on | Stop mining while there is something to hit. |
+| `pause-while-using` | on | Stop mining while eating, drinking or drawing a bow. |
+| `logout-on-attack` | off | Disconnect when a player or an end crystal hurts you. |
 | `no-spleef` | on | Never break the block holding you up. |
 | `stop-on-teleport` | on | Switch off when you are moved somewhere you did not walk to. |
 | `teleport-distance` | 16 | How far in one tick counts as being moved rather than walking. |
@@ -142,6 +150,40 @@ being answered one block at a time, and no amount of waiting fixes it. When the 
 far as it goes and pairs are still half-breaking, `solo-fallback` stops pairing and finishes them
 one at a time — half a pair over and over is the trick not working, and one block at a time still
 clears the job.
+
+### Getting there, and staying there
+
+Baritone reports pathing perfectly happily while walking into a wall, so "is this working" is
+answered from the player's own position instead: `stuck-ticks` of pathing without actually
+moving and the route is given up on, the block is set aside for a minute, and another is tried.
+If something has closed around you it is mined out on the way past. `allow-place` lets Baritone
+put blocks down to get somewhere — knocked off an obsidian platform there is no way back up
+without it, and standing at the bottom of a wall is the commonest way for a job to end. The
+setting is borrowed while the module runs and handed back when it stops.
+
+**`pair-first`** sends you to a block that has another of its kind beside it, in preference to a
+lone one, and `walk-radius` is 1 rather than 2. Standing far enough back to reach only a single
+block is what turns a pair into a solo; the point is to have two within arm's length. Any
+pairable block beats any lone one, and distance decides within each group — so the lone
+stragglers get picked up at the end, which is when they cost nothing.
+
+### While something else is happening
+
+**`fight-back`** hits the nearest hostile within `fight-range`, with no chasing at all: a mob
+that walks out of range stops being a target. Nearest rather than most dangerous, because the one
+that can hit you is the one standing next to you, and a skeleton across the island is somebody
+else's problem. It swings on vanilla's own cooldown.
+
+Mining stops while there is something to hit, and while you are **using** something — holding a
+block down through a carrot cancels the carrot. In both cases the pair in hand is dropped rather
+than frozen: its blocks are counting down on the server and will have finished or expired long
+before a fight is over.
+
+**`logout-on-attack`** disconnects when a **player** or an **end crystal** lands a hit, and is off
+by default because leaving is a decision. The damage source arrives from the server with the hurt
+itself, so this is what actually hit you rather than a guess from who happens to be standing
+about. Mobs deliberately do not count — a creeper is not a reason to lose your place, and
+fight-back is the answer to those.
 
 **`no-spleef`** refuses any block under your feet, across your whole footprint, since standing on
 the edge of two blocks means either could be the one holding you up. Everything else is fair game

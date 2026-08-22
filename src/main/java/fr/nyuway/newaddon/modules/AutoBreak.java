@@ -4,6 +4,7 @@ import fr.nyuway.newaddon.NewAddon;
 import fr.nyuway.newaddon.compat.BaritoneBridge;
 import fr.nyuway.newaddon.utils.Interactions;
 import fr.nyuway.newaddon.utils.Reach;
+import fr.nyuway.newaddon.utils.Unstuck;
 import meteordevelopment.meteorclient.events.render.Render3DEvent;
 import meteordevelopment.meteorclient.events.world.BlockActivateEvent;
 import meteordevelopment.meteorclient.events.world.TickEvent;
@@ -18,12 +19,16 @@ import meteordevelopment.meteorclient.settings.Setting;
 import meteordevelopment.meteorclient.settings.SettingGroup;
 import meteordevelopment.meteorclient.systems.modules.Module;
 import meteordevelopment.meteorclient.utils.misc.Keybind;
+import meteordevelopment.meteorclient.utils.player.Rotations;
 import meteordevelopment.meteorclient.utils.render.color.SettingColor;
 import meteordevelopment.meteorclient.utils.world.BlockUtils;
 import meteordevelopment.orbit.EventHandler;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.util.Mth;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.monster.Enemy;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
@@ -91,6 +96,7 @@ public class AutoBreak extends Module {
     private final SettingGroup sgGeneral = settings.getDefaultGroup();
     private final SettingGroup sgSpeed = settings.createGroup("Speed mine");
     private final SettingGroup sgWalk = settings.createGroup("Walking");
+    private final SettingGroup sgFight = settings.createGroup("Combat");
     private final SettingGroup sgSafety = settings.createGroup("Safety");
     private final SettingGroup sgRender = settings.createGroup("Render");
 
@@ -231,9 +237,35 @@ public class AutoBreak extends Module {
 
     private final Setting<Integer> walkRadius = sgWalk.add(new IntSetting.Builder()
         .name("walk-radius")
-        .description("How close Baritone has to get before this takes over. Two or three: " +
-                     "standing on the block is neither necessary nor helpful.")
-        .defaultValue(2).min(0).max(6).sliderRange(0, 6)
+        .description("How close Baritone has to get before this takes over. One: standing far " +
+                     "enough back to only reach a single block is what turns a pair into a solo, " +
+                     "and the whole point is to have two within arm's length.")
+        .defaultValue(1).min(0).max(6).sliderRange(0, 4)
+        .build());
+
+    private final Setting<Boolean> pairFirst = sgWalk.add(new BoolSetting.Builder()
+        .name("pair-first")
+        .description("Walk to a block that has another of its kind beside it, in preference to " +
+                     "a lone one. A block on its own can only ever be mined solo, so going to " +
+                     "the edge of the job first and working inwards is slower for no reason.")
+        .defaultValue(true)
+        .build());
+
+    private final Setting<Integer> stuckTicks = sgWalk.add(new IntSetting.Builder()
+        .name("stuck-ticks")
+        .description("Ticks of Baritone pathing without actually moving before the route is " +
+                     "given up on. It happens: a ledge it will not step off, a block it cannot " +
+                     "get round. The block is set aside for a while and another is tried.")
+        .defaultValue(60).min(20).max(600).sliderRange(20, 200)
+        .build());
+
+    private final Setting<Boolean> allowPlace = sgWalk.add(new BoolSetting.Builder()
+        .name("allow-place")
+        .description("Let Baritone place blocks to get somewhere while this module is on, and " +
+                     "put the setting back afterwards. Knocked off an obsidian platform there " +
+                     "is no way back up without it, and standing at the bottom of a wall is the " +
+                     "commonest way for a job to end.")
+        .defaultValue(true)
         .build());
 
     private final Setting<Integer> searchChunks = sgWalk.add(new IntSetting.Builder()
@@ -249,7 +281,48 @@ public class AutoBreak extends Module {
         .defaultValue(32).min(4).max(256).sliderRange(8, 128)
         .build());
 
+    // --- combat ----------------------------------------------------------------
+
+    private final Setting<Boolean> fightBack = sgFight.add(new BoolSetting.Builder()
+        .name("fight-back")
+        .description("Hit hostile mobs that come within reach. A skeleton shooting at you from " +
+                     "across the island is somebody else's problem; one standing next to you is " +
+                     "the reason the job stops.")
+        .defaultValue(true)
+        .build());
+
+    private final Setting<Double> fightRange = sgFight.add(new DoubleSetting.Builder()
+        .name("fight-range")
+        .description("How close a mob has to be to be worth turning on. Deliberately short - " +
+                     "chasing one across the map is how a job becomes a walk.")
+        .defaultValue(5).min(2).max(16).sliderRange(3, 8)
+        .visible(fightBack::get)
+        .build());
+
+    private final Setting<Boolean> pauseWhileFighting = sgFight.add(new BoolSetting.Builder()
+        .name("pause-while-fighting")
+        .description("Stop mining while there is something to hit. Doing both at once means " +
+                     "doing neither: the pair being held is dropped every time an arm swings " +
+                     "somewhere else.")
+        .defaultValue(true)
+        .build());
+
     // --- safety --------------------------------------------------------------
+
+    private final Setting<Boolean> pauseWhileUsing = sgSafety.add(new BoolSetting.Builder()
+        .name("pause-while-using")
+        .description("Stop mining while you are using something - eating, drinking, drawing a " +
+                     "bow. Holding a block down through a carrot cancels the carrot.")
+        .defaultValue(true)
+        .build());
+
+    private final Setting<Boolean> logoutOnAttack = sgSafety.add(new BoolSetting.Builder()
+        .name("logout-on-attack")
+        .description("Disconnect when a player or an end crystal hurts you. Off by default, " +
+                     "because leaving is a decision. Mobs do not count - that is what fight-back " +
+                     "is for, and a creeper is not a reason to lose your place.")
+        .defaultValue(false)
+        .build());
 
     private final Setting<Boolean> noSpleef = sgSafety.add(new BoolSetting.Builder()
         .name("no-spleef")
@@ -356,6 +429,22 @@ public class AutoBreak extends Module {
     /** When Baritone's scanner was last asked, so it is not asked twenty times a second. */
     private long lastScan;
 
+    /** Ticks of pathing without moving, and where we were when that started. */
+    private int stillTicks;
+    private Vec3 stillAt;
+
+    /** Blocks a route already failed to reach, and when they may be tried again. */
+    private final java.util.Map<BlockPos, Long> givenUp = new java.util.HashMap<>();
+
+    /** Reused by the trapped-block search so a tick allocates nothing. */
+    private final BlockPos.MutableBlockPos unstickCursor = new BlockPos.MutableBlockPos();
+
+    /** Last seen hurt frame, to catch the tick damage lands on. */
+    private int lastHurt;
+
+    /** Baritone's own block-placing setting, put back when the module is switched off. */
+    private Object placeBefore;
+
     public AutoBreak() {
         super(NewAddon.CATEGORY, "auto-break",
             "Right-click a block; every block of that kind nearby comes down.");
@@ -389,6 +478,17 @@ public class AutoBreak extends Module {
         cleanPairs = 0;
         halfPairs = 0;
         solo = false;
+        stillTicks = 0;
+        stillAt = null;
+        lastHurt = 0;
+        givenUp.clear();
+
+        // Borrowed, and given back in onDeactivate. Turning somebody's pathfinder setting on and
+        // leaving it on is the kind of thing that gets blamed on the pathfinder a week later.
+        if (allowPlace.get() && BaritoneBridge.isUsable()) {
+            placeBefore = BaritoneBridge.setting("allowPlace");
+            BaritoneBridge.setSetting("allowPlace", true);
+        }
 
         if (notify.get()) {
             info("Right-click the block you want gone, or bind pick-key and look at it.");
@@ -404,6 +504,11 @@ public class AutoBreak extends Module {
         if (walkTarget != null) BaritoneBridge.cancel();
         walkTarget = null;
         clearPair();
+
+        if (placeBefore != null) {
+            BaritoneBridge.setSetting("allowPlace", placeBefore);
+            placeBefore = null;
+        }
     }
 
     // --- picking -------------------------------------------------------------
@@ -453,8 +558,117 @@ public class AutoBreak extends Module {
 
         if (wanted == null) return;
 
+        watchForAttack();
+
+        // Using something - eating, drinking, drawing a bow - is a thing you cannot do while
+        // holding a block down, so the block waits. It is a fifth of a second of mining lost
+        // against a carrot cancelled every single time.
+        if (pauseWhileUsing.get() && mc.player.isUsingItem()) {
+            letGo();
+            return;
+        }
+
+        if (fightBack.get() && fight() && pauseWhileFighting.get()) {
+            letGo();
+            return;
+        }
+
         if (mode.get() == Mode.SpeedMine) tickPair();
         else tickOne();
+    }
+
+    /**
+     * Drops whatever was being held, for a pause that is about to last more than a tick.
+     *
+     * <p>The pair is abandoned rather than frozen. Its blocks are counting down on the server
+     * and will have finished or expired long before a fight is over, and coming back to a
+     * half-remembered pair is how a stale block position gets mined at for thirty seconds.
+     */
+    private void letGo() {
+        if (stage == Stage.PICK && first == null) return;
+
+        stopBreaking();
+        clearPair();
+    }
+
+    // --- fighting --------------------------------------------------------------
+
+    /**
+     * Hits the nearest hostile within reach.
+     *
+     * <p>Nearest rather than weakest or most dangerous: the one that can hit you is the one
+     * standing next to you, and a skeleton across the island is somebody else's problem. There
+     * is no chasing here at all - if it walks out of range it stops being a target, which is
+     * what keeps a job from turning into a walk.
+     *
+     * @return true when there was something to hit, whether or not the swing landed this tick
+     */
+    private boolean fight() {
+        LivingEntity foe = nearestThreat();
+        if (foe == null) return false;
+
+        // Vanilla's own cooldown. Swinging early is a swing that does almost nothing, and the
+        // server sees a player attacking faster than a player can.
+        if (mc.player.getAttackStrengthScale(0.5f) < 1.0f) return true;
+
+        Rotations.rotate(Rotations.getYaw(foe), Rotations.getPitch(foe), () -> {
+            mc.gameMode.attack(mc.player, foe);
+            mc.player.swing(net.minecraft.world.InteractionHand.MAIN_HAND);
+        });
+
+        if (debug.get()) log("hitting %s", foe.getName().getString());
+        return true;
+    }
+
+    private LivingEntity nearestThreat() {
+        if (mc.level == null || mc.player == null) return null;
+
+        double limit = fightRange.get() * fightRange.get();
+        LivingEntity best = null;
+
+        for (Entity entity : mc.level.entitiesForRendering()) {
+            if (!(entity instanceof LivingEntity living) || !(entity instanceof Enemy)) continue;
+            if (!living.isAlive() || living == mc.player) continue;
+
+            double dist = mc.player.distanceToSqr(living);
+            if (dist > limit) continue;
+
+            limit = dist;
+            best = living;
+        }
+        return best;
+    }
+
+    // --- being attacked ----------------------------------------------------------
+
+    /**
+     * Leaves when a player or an end crystal lands a hit.
+     *
+     * <p>The damage source arrives from the server with the hurt itself, so this is what hit you
+     * rather than a guess from who happens to be standing about. Mobs are deliberately not in
+     * it: a creeper is not a reason to lose your place, and fight-back is the answer to those.
+     */
+    private void watchForAttack() {
+        int hurt = mc.player.hurtTime;
+        int before = lastHurt;
+        lastHurt = hurt;
+
+        if (!logoutOnAttack.get() || hurt <= before) return;
+
+        var source = mc.player.getLastDamageSource();
+        if (source == null) return;
+
+        boolean byPlayer = source.getEntity() instanceof net.minecraft.world.entity.player.Player;
+        boolean byCrystal = source.getDirectEntity()
+            instanceof net.minecraft.world.entity.boss.enderdragon.EndCrystal;
+        if (!byPlayer && !byCrystal) return;
+
+        warning("Hit by %s; disconnecting.", byPlayer ? "a player" : "a crystal");
+        toggle();
+        if (mc.getConnection() != null) {
+            mc.getConnection().getConnection().disconnect(
+                net.minecraft.network.chat.Component.literal("Attacked while mining"));
+        }
     }
 
     /** One block, faced and held until it breaks, then the next. */
@@ -828,13 +1042,27 @@ public class AutoBreak extends Module {
             if (!isWanted(walkTarget)) {
                 BaritoneBridge.cancel();
                 walkTarget = null;
+                stillTicks = 0;
             } else if (BaritoneBridge.isPathing()) {
-                return;
-            } else {
-                // Baritone stopped without getting us there. Blacklisting is not worth the
-                // bookkeeping here: the scan below will pick something, and if it picks the same
-                // unreachable block again the user can see it standing still and say so.
+                if (!goingNowhere()) return;
+
+                // Pathing and not moving. A ledge it will not step off, a block it cannot get
+                // round, a platform it cannot climb - whatever it is, waiting longer has never
+                // once helped. Set the block aside, dig out if something has closed around us,
+                // and let the scan below pick somewhere else.
+                if (debug.get()) log("stuck on the way to %s; trying elsewhere", walkTarget);
+                BaritoneBridge.cancel();
+                givenUp.put(walkTarget, System.currentTimeMillis() + GIVEN_UP_MS);
                 walkTarget = null;
+                stillTicks = 0;
+
+                BlockPos trap = Unstuck.find(mc, unstickCursor);
+                if (trap != null) mine(trap);
+            } else {
+                // Baritone stopped without getting us there, and said so by not pathing.
+                givenUp.put(walkTarget, System.currentTimeMillis() + GIVEN_UP_MS);
+                walkTarget = null;
+                stillTicks = 0;
             }
         }
 
@@ -852,22 +1080,81 @@ public class AutoBreak extends Module {
         BlockPos player = mc.player.blockPosition();
         BlockPos nearest = null;
         double best = Double.MAX_VALUE;
+        boolean bestPairs = false;
 
         for (BlockPos pos : found) {
             if (supportsMe(pos)) continue;
 
+            Long until = givenUp.get(pos);
+            if (until != null && now < until) continue;
+
+            // A block with a neighbour of its own kind can be mined as a pair; a lone one never
+            // can. Walking to the edge of a job and working inwards is slower for no reason, so
+            // any pairable block beats any lone one, and distance decides within each group.
+            boolean pairs = !pairFirst.get() || hasPartner(pos);
+            if (bestPairs && !pairs) continue;
+
             double dist = pos.distSqr(player);
-            if (dist >= best) continue;
+            if (pairs == bestPairs && dist >= best) continue;
 
             best = dist;
             nearest = pos;
+            bestPairs = pairs;
         }
 
         if (nearest == null) return;
 
         walkTarget = nearest;
+        stillTicks = 0;
+        stillAt = mc.player.position();
         BaritoneBridge.pathTo(nearest, walkRadius.get());
-        if (debug.get()) log("walking to %s", nearest);
+        if (debug.get()) log("walking to %s%s", nearest, bestPairs ? " (pairable)" : " (alone)");
+    }
+
+    /** How long a block that could not be reached is left alone before being tried again. */
+    private static final long GIVEN_UP_MS = 60_000;
+
+    /**
+     * Whether Baritone is pathing but we are not actually going anywhere.
+     *
+     * <p>Measured from the position rather than from anything Baritone says about itself: it
+     * reports pathing perfectly happily while walking into a wall, and the only honest answer to
+     * "is this working" is whether the player has moved.
+     */
+    private boolean goingNowhere() {
+        Vec3 here = mc.player.position();
+        if (stillAt == null || here.distanceToSqr(stillAt) > 0.25) {
+            stillAt = here;
+            stillTicks = 0;
+            return false;
+        }
+        return ++stillTicks > stuckTicks.get();
+    }
+
+    /**
+     * Whether another block of the same kind is close enough to this one to be its pair.
+     *
+     * <p>Within reach of somewhere a player could stand beside both, which is roughly the mining
+     * range - so the box is the range across and the test is simply "is there another one in
+     * it". Cheap enough at once a second over the handful of candidates a scan returns.
+     */
+    private boolean hasPartner(BlockPos pos) {
+        if (mc.level == null) return false;
+
+        int r = Math.max(1, Mth.floor(range.get()) - 1);
+        BlockPos.MutableBlockPos cursor = new BlockPos.MutableBlockPos();
+
+        for (int dx = -r; dx <= r; dx++) {
+            for (int dy = -1; dy <= 1; dy++) {
+                for (int dz = -r; dz <= r; dz++) {
+                    if (dx == 0 && dy == 0 && dz == 0) continue;
+
+                    cursor.set(pos.getX() + dx, pos.getY() + dy, pos.getZ() + dz);
+                    if (mc.level.getBlockState(cursor).getBlock() == wanted) return true;
+                }
+            }
+        }
+        return false;
     }
 
     // --- odds and ends -------------------------------------------------------
