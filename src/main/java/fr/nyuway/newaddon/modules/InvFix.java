@@ -16,7 +16,7 @@ import meteordevelopment.meteorclient.systems.modules.Modules;
  * kick or a ghosted item when it does it.
  *
  * <h2>Why this is a module and not just always on</h2>
- * All three are wrong anywhere else. Shift-clicking into a full container is fine on a normal
+ * All of them are wrong anywhere else. Shift-clicking into a full container is fine on a normal
  * server, and refusing the click would be an unexplained dead input; the bundle workaround is
  * only correct against 2b2t's own reading of the packet. So they are switched on deliberately,
  * and the module stays off until you are playing there.
@@ -44,6 +44,16 @@ public class InvFix extends Module {
         .defaultValue(true)
         .build());
 
+    private final Setting<Integer> mapMoveInterval = sgGeneral.add(new IntSetting.Builder()
+        .name("map-move-interval")
+        .description("Milliseconds between two clicks that move a filled map. Every filled map " +
+                     "that changes slot makes the server send its picture again, and a handful " +
+                     "moved in the same breath - a chest of map art, sorted with the mouse held " +
+                     "down - is what leaves them ghosted. Empty maps are ordinary items and are " +
+                     "not paced. Zero turns it off.")
+        .defaultValue(250).min(0).max(2000).sliderRange(0, 1000)
+        .build());
+
     private final Setting<Integer> openInterval = sgGeneral.add(new IntSetting.Builder()
         .name("container-open-interval")
         .description("Milliseconds between two container opens. 2b2t drops a connection that " +
@@ -54,6 +64,32 @@ public class InvFix extends Module {
 
     /** When a container was last opened, so the next one can be made to wait its turn. */
     private static long lastOpen;
+
+    /** The same, for filled maps, which are paced against each other and nothing else. */
+    private static long lastMapMove;
+
+    /**
+     * Whether a filled map may be moved right now.
+     *
+     * <p>Called from the mixin that sees an inventory click, and only when the click actually
+     * involves a filled map - either the one in the slot or the one on the cursor. A refused
+     * click is a click that did nothing, which is the same thing that happens when you click a
+     * slot the server has already emptied, and much better than a map that draws as an item and
+     * turns out not to be there.
+     */
+    public static boolean mayMoveMap() {
+        InvFix module = get();
+        if (module == null || !module.isActive()) return true;
+
+        int interval = module.mapMoveInterval.get();
+        if (interval <= 0) return true;
+
+        long now = System.currentTimeMillis();
+        if (now - lastMapMove < interval) return false;
+
+        lastMapMove = now;
+        return true;
+    }
 
     /**
      * Whether a container may be opened right now.
@@ -78,7 +114,8 @@ public class InvFix extends Module {
 
     public InvFix() {
         super(NewAddon.CATEGORY, "2b2t-inv-fix",
-            "Works around 2b2t's inventory handling: full-container clicks and unstackable drags.");
+            "Works around 2b2t's inventory handling: full-container clicks, unstackable drags, "
+                + "and filled maps moved faster than the server redraws them.");
     }
 
     // --- read by the mixins -------------------------------------------------

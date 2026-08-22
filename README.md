@@ -78,6 +78,8 @@ and look at it instead.
 | `swing` | on | Swing your arm; off sends the swing as a packet instead. |
 | `range` | 4.5 | How far a block can be and still be broken. |
 | `hold-ms` | 200 | (SpeedMine) How long to hold each of the two blocks. |
+| `first-clicks` | 2 | (SpeedMine) How many times to click the first block. |
+| `click-gap-ms` | 50 | (SpeedMine) Time between those clicks. |
 | `grace-ms` | 500 | (SpeedMine) Margin on top of the time the block should have taken. |
 | `release` | off | (SpeedMine) Let go of the button before waiting. |
 | `walk` | on | Use Baritone to reach the next one. |
@@ -90,8 +92,13 @@ and look at it instead.
 
 ### SpeedMine
 
-Hold the button on one block for a moment — a fifth of a second is plenty — then on the other for
-the same moment, and then **stop and wait** for both to come down on their own.
+Double-click the first block, hold it for a moment — a fifth of a second is plenty — then click
+the other and hold that, and then **stop and wait** for both to come down on their own.
+
+The double click is on the first block only, which is where it is needed; the second comes down
+on one. It is a real double click, release included, because pressing twice without letting go
+does nothing: the game sees the same block already being broken and returns without sending
+anything.
 
 **The waiting is the technique.** Going back to poke at the blocks is what stops them from ever
 getting there, so once both have been started nothing is sent at all until they break or they are
@@ -588,9 +595,9 @@ location; `i got 3 4 5 diamonds` is a sentence.
 
 ## 2b2tInvFix
 
-Two things the client does that 2b2t will not accept, stopped before it does them. Brought over
-from BepHax, where they were worked out. Neither is a cheat: each one prevents a desync you pay
-for with a kick or a ghosted item.
+Things the client does that 2b2t will not accept, stopped before it does them. Brought over from
+BepHax, where they were worked out. None of it is a cheat: each one prevents a desync you pay for
+with a kick or a ghosted item.
 
 - **`prevent-full-container-clicks`** — a shift-click is dropped when the half of the window it
   would move the stack into has neither an empty slot nor a matching stack with room. Cancelled
@@ -598,10 +605,19 @@ for with a kick or a ghosted item.
   only the packet would leave the client showing a move the server never heard of.
 - **`fix-unstackable-dragging`** — a drag carrying something unstackable is swallowed. A drag
   spreads the cursor stack over the slots it crosses, which a pickaxe cannot do; what you are
-  left looking at is a ghost.
+  left looking at is a ghost. This already covers filled maps, shulker boxes and every other
+  single-item stack, since the question it asks is whether the thing stacks at all.
+- **`map-move-interval`** — clicks that move a **filled** map are paced against each other, 250ms
+  apart by default. Every filled map that changes slot makes the server send its picture again;
+  one is nothing, but a chest of map art sorted with the mouse held down is a burst of them, and
+  what comes back is a map that draws as an item and turns out not to be there. Both sides of the
+  click are looked at, since a map on the cursor being put down costs the same as one being
+  picked up. An empty map is an ordinary stackable item with no picture to send and is not paced.
+- **`container-open-interval`** — the same idea for opening containers, which 2b2t counts and
+  drops you for asking too fast.
 
-Off by default, and deliberately so: both are wrong on a normal server, where a shift-click into
-a full container is simply a shift-click into a full container.
+Off by default, and deliberately so: all of it is wrong on a normal server, where a shift-click
+into a full container is simply a shift-click into a full container.
 
 ## FriendSync
 

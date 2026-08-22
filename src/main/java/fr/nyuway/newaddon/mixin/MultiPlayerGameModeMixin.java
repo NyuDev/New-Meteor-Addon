@@ -38,6 +38,11 @@ public class MultiPlayerGameModeMixin {
     private void newAddon$blockFullContainerClick(int containerId, int slotId, int button,
                                                   net.minecraft.world.inventory.ClickType type,
                                                   Player player, CallbackInfo info) {
+        if (newAddon$tooSoonForAMap(containerId, slotId)) {
+            info.cancel();
+            return;
+        }
+
         if (type != net.minecraft.world.inventory.ClickType.QUICK_MOVE) return;
         if (newAddon$wouldGoNowhere(containerId, slotId)) info.cancel();
     }
@@ -46,6 +51,11 @@ public class MultiPlayerGameModeMixin {
     private void newAddon$blockFullContainerClick(int containerId, int slotId, int button,
                                                   net.minecraft.world.inventory.ContainerInput type,
                                                   Player player, CallbackInfo info) {
+        if (newAddon$tooSoonForAMap(containerId, slotId)) {
+            info.cancel();
+            return;
+        }
+
         if (type != net.minecraft.world.inventory.ContainerInput.QUICK_MOVE) return;
         if (newAddon$wouldGoNowhere(containerId, slotId)) info.cancel();
     }
@@ -81,6 +91,39 @@ public class MultiPlayerGameModeMixin {
         if (!InvFix.mayOpenContainer()) {
             callback.setReturnValue(net.minecraft.world.InteractionResult.FAIL);
         }
+    }
+
+    /**
+     * Whether this click moves a filled map and the last one was a moment ago.
+     *
+     * <p>Every filled map that changes slot makes the server send its picture again. One is
+     * nothing; a chest of map art sorted with the mouse held down is a burst of them, and what
+     * comes back is a map that draws as an item and turns out not to be there. So they are paced
+     * against each other, the way container opens are - the whole click is dropped rather than
+     * the packet, because the client acts first and tells the server afterwards, and stopping
+     * only the packet would leave the client showing a move nobody else heard about.
+     *
+     * <p>An empty map is an ordinary stackable item with no picture to send, and is not paced.
+     * Both sides of the click are looked at, since a map on the cursor being put down costs the
+     * same as one being picked up.
+     */
+    private boolean newAddon$tooSoonForAMap(int containerId, int slotId) {
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.player == null) return false;
+
+        AbstractContainerMenu menu = mc.player.containerMenu;
+        if (menu == null || menu.containerId != containerId) return false;
+
+        boolean map = newAddon$isFilledMap(menu.getCarried());
+        if (!map && slotId >= 0 && slotId < menu.slots.size()) {
+            map = newAddon$isFilledMap(menu.getSlot(slotId).getItem());
+        }
+
+        return map && !InvFix.mayMoveMap();
+    }
+
+    private static boolean newAddon$isFilledMap(ItemStack stack) {
+        return !stack.isEmpty() && stack.is(net.minecraft.world.item.Items.FILLED_MAP);
     }
 
     /**

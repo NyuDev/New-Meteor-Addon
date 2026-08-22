@@ -47,9 +47,14 @@ import java.util.List;
  * <h2>Two ways of breaking</h2>
  * <b>Vanilla</b> is the honest one: face a block, hold the button, wait for it to break, move on.
  *
- * <p><b>SpeedMine</b> works two at a time. It holds the button on one block for a moment - a
- * fifth of a second is plenty - then on the other for the same moment, and then <em>stops and
- * waits</em> for both to come down on their own.
+ * <p><b>SpeedMine</b> works two at a time. It double-clicks the first block, holds it for a
+ * moment - a fifth of a second is plenty - then clicks the other and holds that, and then
+ * <em>stops and waits</em> for both to come down on their own.
+ *
+ * <p>The double click is on the first block only, which is where it is needed; the second comes
+ * down on one. It is a real double click, release included, because pressing twice without
+ * letting go does nothing: the game sees the same block already being broken and returns without
+ * sending anything.
  *
  * <h2>The waiting is the technique</h2>
  * Going back to poke at the blocks is what stops them from ever getting there, so once both have
@@ -144,6 +149,22 @@ public class AutoBreak extends Module {
         .description("How long to hold each of the two blocks. A fifth of a second is usually " +
                      "plenty - it only has to be long enough to have started them.")
         .defaultValue(200).min(20).max(2000).sliderRange(50, 800)
+        .build());
+
+    private final Setting<Integer> firstClicks = sgSpeed.add(new IntSetting.Builder()
+        .name("first-clicks")
+        .description("How many times to click the first block before moving to the second. Two: " +
+                     "the first block is the one that needs telling twice, and the second comes " +
+                     "down on one. One turns the double click off.")
+        .defaultValue(2).min(1).max(5).sliderRange(1, 3)
+        .build());
+
+    private final Setting<Integer> clickGapMs = sgSpeed.add(new IntSetting.Builder()
+        .name("click-gap-ms")
+        .description("Time between those clicks. Short - this is a double click, not two " +
+                     "attempts, and a long gap is just the first click again.")
+        .defaultValue(50).min(10).max(500).sliderRange(20, 200)
+        .visible(() -> firstClicks.get() > 1)
         .build());
 
     private final Setting<Integer> graceMs = sgSpeed.add(new IntSetting.Builder()
@@ -261,6 +282,10 @@ public class AutoBreak extends Module {
 
     /** When to stop waiting, worked out from how long the blocks should have taken. */
     private long deadline;
+
+    /** Clicks landed on the first block so far, and when the last one went out. */
+    private int clicks;
+    private long clickedAt;
 
     private enum Stage {
         /** Nothing in hand: choose two. */
@@ -417,6 +442,8 @@ public class AutoBreak extends Module {
                 second = nearestInReach(first);
 
                 press(first, true);
+                clicks = 1;
+                clickedAt = now;
                 enter(Stage.FIRST, now);
                 if (debug.get()) log("pair %s + %s", first, second);
             }
@@ -425,6 +452,18 @@ public class AutoBreak extends Module {
                 if (first == null) {
                     // Gone already - an instamine, or the other client got there first.
                     startSecond(now);
+                    return;
+                }
+
+                // A real double click: let go, then press again. Pressing twice without the
+                // release in between does nothing at all - the game sees the same block already
+                // being broken and returns without sending anything.
+                if (clicks < firstClicks.get() && now - clickedAt >= clickGapMs.get()) {
+                    if (mc.gameMode != null) mc.gameMode.stopDestroyBlock();
+                    press(first, true);
+                    clicks++;
+                    clickedAt = now;
+                    if (debug.get()) log("click %d on %s", clicks, first);
                     return;
                 }
 
@@ -524,6 +563,8 @@ public class AutoBreak extends Module {
         stage = Stage.PICK;
         stageAt = 0;
         deadline = 0;
+        clicks = 0;
+        clickedAt = 0;
     }
 
     // --- breaking ------------------------------------------------------------
