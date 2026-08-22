@@ -718,10 +718,16 @@ run while any other screen was up, waiting for a screen that was never coming. S
 bone-meal crafting grid, which asked for no screen at all rather than asking the one question
 that matters, which is whether the open *menu* is still the player's own.
 
-Both now carry on. The clicks work either way, so when a screen you opened is up the appearance
-is skipped and the work is done — closing the chat somebody is typing into, to put up an
-inventory nobody asked for, would be the worse surprise. A chest or shulker being open still
-stops them, because that is a menu the run is in the middle of using.
+Both now carry on, and the screen behaves differently depending on which screen is in the way,
+because the two are not alike. **The pause menu is replaced** — nothing is lost by doing so, and
+it is what makes a run look the same whether or not you were watching it, which is the whole
+point of putting the screen up at all. **The chat is left exactly where it is** and the moves go
+ahead without a screen of their own; closing the chat somebody is typing into, to show an
+inventory nobody asked for, is the worse surprise, and the clicks work either way since the
+player's menu is open server-side whether or not anything is drawn.
+
+A chest or shulker being open still stops them, because that is a menu the run is in the middle
+of using.
 
 ## Supported versions
 

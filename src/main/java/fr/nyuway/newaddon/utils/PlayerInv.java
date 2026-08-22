@@ -3,6 +3,7 @@ package fr.nyuway.newaddon.utils;
 import meteordevelopment.meteorclient.utils.player.FindItemResult;
 import meteordevelopment.meteorclient.utils.player.InvUtils;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.screens.ChatScreen;
 import net.minecraft.client.gui.screens.inventory.InventoryScreen;
 import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.item.BlockItem;
@@ -132,12 +133,20 @@ public final class PlayerInv {
      * <p>Refuses while a chest or shulker is open, because putting a screen up there would close
      * it, and the run is in the middle of using it.
      *
-     * <p>Carries on without it while any <em>other</em> screen is up - the chat, the pause menu,
-     * the inventory opened by hand. It used to refuse there too, which meant that opening chat
-     * or pressing Escape quietly stopped a resupply half way through: the moves waited for a
-     * screen that was not coming, and the run timed out. Since the screen is only for looking
-     * ordinary and the clicks work either way, the right answer is to skip the appearance and
-     * do the work. Automation that stalls because you pressed Escape is not automation.
+     * <h2>When another screen is already up</h2>
+     * It used to refuse outright, which meant that alt-tabbing away - and so putting the pause
+     * menu up - quietly stopped a resupply half way through, waiting for a screen that was never
+     * going to arrive. Two different answers now, because the two screens are not alike:
+     *
+     * <ul>
+     *   <li><b>The chat</b> is left exactly where it is, and the moves go ahead without a screen
+     *       of their own. Closing the chat somebody is typing into, to put up an inventory nobody
+     *       asked for, is a worse surprise than a missing screen - and the clicks work either
+     *       way, since the player's menu is open server-side whether or not anything is drawn.</li>
+     *   <li><b>Anything else</b> - the pause menu above all - is replaced. Nothing is lost by
+     *       doing so, and it is what makes the run look the same whether or not you were watching
+     *       it, which is the whole point of putting the screen up at all.</li>
+     * </ul>
      *
      * @return true when a click will reach the slots it is aimed at
      */
@@ -145,12 +154,19 @@ public final class PlayerInv {
         if (!useScreen) return true;
         if (mc.player.containerMenu != mc.player.inventoryMenu) return false;
 
-        // Somebody else's screen. Leave it alone - closing the chat somebody is typing into, to
-        // put up an inventory nobody asked for, would be a worse surprise than a missing screen.
-        if (mc.screen != null && !(mc.screen instanceof InventoryScreen)) return true;
+        if (mc.screen instanceof InventoryScreen) {
+            wantedAt = mc.level == null ? 0 : mc.level.getGameTime();
+            return true;
+        }
 
-        if (mc.screen == null) mc.setScreen(new InventoryScreen(mc.player));
+        // Never steal what somebody is typing into. The work still happens; only the appearance
+        // is skipped, which nobody is looking at anyway with a text box in front of them.
+        if (mc.screen instanceof ChatScreen) return true;
 
+        mc.setScreen(new InventoryScreen(mc.player));
+
+        // Belt and braces. Another mod can refuse a screen change, and a run that stops because
+        // the picture did not come up would be the original bug wearing a different hat.
         wantedAt = mc.level == null ? 0 : mc.level.getGameTime();
         return true;
     }
