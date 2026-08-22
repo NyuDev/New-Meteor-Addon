@@ -91,7 +91,8 @@ and look at it instead.
 | `pair-first` | on | Prefer a block that has another of its kind beside it. |
 | `lock-layer` | on | Measure `y-range` from the block you picked, not from your feet. |
 | `stuck-ticks` | 60 | Ticks of pathing without moving before the route is given up on. |
-| `allow-place` | on | Let Baritone place blocks to get somewhere, restored on switch-off. |
+| `allow-place` | on | Lend Baritone placing, parkour, and the blocks in your pack. |
+| `dig-out` | on | Mine towards the next block when no route exists at all. |
 | `search-chunks` | 8 | How far to look for more. |
 | `y-range` | 4 | How far above or below the working layer to consider. |
 | `fight-back` | on | Hit hostile mobs that come within reach. |
@@ -198,6 +199,30 @@ And above all of it, one rule that does not care why: **a minute without a singl
 down** and the current targets are set aside, the route is dropped, and it looks somewhere else.
 Every individual failure has its own way out; this is the one that catches the combinations
 nobody thought of.
+
+### When there is no route at all
+
+Baritone's log said it: `198 movements considered`, `Open set size: 0`, `PathNode map size: 9`.
+Nine nodes explored and the open set exhausted — from where the player was standing there were no
+legal movements, and it re-ran that every second for ever. Busy, and going nowhere.
+
+`allow-place` used to lend Baritone one setting. That was not enough, and one part of it was
+actively misleading: Baritone will only throw down blocks on its `acceptableThrowawayItems` list,
+which is dirt, cobblestone and netherrack — **nobody in the End is carrying any of those**, so
+placing was allowed and impossible at the same time. It now lends four movement settings
+(`allowPlace`, `allowParkour`, `allowParkourPlace`, `allowParkourAscend`) *and* offers the blocks
+actually in your pack, read from the inventory every few seconds, minus the block you came to
+mine — bridging with the thing you are removing is a circle. Everything borrowed is handed back
+when the module stops.
+
+If routes are still refused three times running, `dig-out` stops asking and **mines a corridor
+towards the block** — head height then foot height, which is something a player can walk down.
+Baritone is asked again as soon as there is one. A tunnel is a route nobody had to find.
+
+Refusals are told apart from arrivals by the clock: Baritone gives up in milliseconds when there
+is nothing to walk on, so not-pathing two seconds after being asked is a refusal, while
+not-pathing immediately is just the pause before it starts. One route that gets going clears the
+tally, or three refusals half an hour ago would have it tunnelling for the rest of the run.
 
 ### Getting there, and staying there
 

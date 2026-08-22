@@ -261,10 +261,21 @@ public class AutoBreak extends Module {
 
     private final Setting<Boolean> allowPlace = sgWalk.add(new BoolSetting.Builder()
         .name("allow-place")
-        .description("Let Baritone place blocks to get somewhere while this module is on, and " +
-                     "put the setting back afterwards. Knocked off an obsidian platform there " +
-                     "is no way back up without it, and standing at the bottom of a wall is the " +
-                     "commonest way for a job to end.")
+        .description("Let Baritone bridge and pillar while this module is on, and put its " +
+                     "settings back afterwards. This turns on parkour too, and - the part that " +
+                     "actually matters - adds whatever blocks you are carrying to the list " +
+                     "Baritone is willing to throw down. Its own list is dirt, cobblestone and " +
+                     "netherrack, none of which anybody has in the End, so placing was allowed " +
+                     "and impossible at the same time.")
+        .defaultValue(true)
+        .build());
+
+    private final Setting<Boolean> digOut = sgWalk.add(new BoolSetting.Builder()
+        .name("dig-out")
+        .description("Mine a way towards the next block when Baritone cannot find any route at " +
+                     "all. It gives up in a few milliseconds when there is nothing to walk on - " +
+                     "which reads as the module being busy for ever - and a tunnel is a route " +
+                     "nobody had to find.")
         .defaultValue(true)
         .build());
 
@@ -482,8 +493,19 @@ public class AutoBreak extends Module {
     /** When a block last actually came down, so a job that is going nowhere can say so. */
     private long lastBreak;
 
-    /** Baritone's own block-placing setting, put back when the module is switched off. */
-    private Object placeBefore;
+    /** Baritone settings borrowed while this runs, put back when it stops. */
+    private final java.util.Map<String, Object> borrowed = new java.util.LinkedHashMap<>();
+
+    /** When the throwaway list was last refreshed from the inventory. */
+    private long lastThrowaway;
+
+    /** Routes Baritone refused outright, in a row, and when the last one was asked for. */
+    private int refusedRoutes;
+    private long routeAt;
+
+    /** Where we are digging towards, and until when. */
+    private BlockPos digTo;
+    private long digUntil;
 
     public AutoBreak() {
         super(NewAddon.CATEGORY, "auto-break",
@@ -526,12 +548,12 @@ public class AutoBreak extends Module {
         lastBreak = System.currentTimeMillis();
         givenUp.clear();
 
-        // Borrowed, and given back in onDeactivate. Turning somebody's pathfinder setting on and
-        // leaving it on is the kind of thing that gets blamed on the pathfinder a week later.
-        if (allowPlace.get() && BaritoneBridge.isUsable()) {
-            placeBefore = BaritoneBridge.setting("allowPlace");
-            BaritoneBridge.setSetting("allowPlace", true);
-        }
+        refusedRoutes = 0;
+        routeAt = 0;
+        digTo = null;
+        digUntil = 0;
+        lastThrowaway = 0;
+        borrow();
 
         if (notify.get()) {
             info("Right-click the block you want gone, or bind pick-key and look at it.");
@@ -548,10 +570,75 @@ public class AutoBreak extends Module {
         walkTarget = null;
         clearPair();
 
-        if (placeBefore != null) {
-            BaritoneBridge.setSetting("allowPlace", placeBefore);
-            placeBefore = null;
+        giveBack();
+    }
+
+    // --- borrowing Baritone's settings -------------------------------------------
+
+    /** The switches that decide whether a route exists at all when the ground runs out. */
+    private static final String[] BORROWED = {
+        "allowPlace", "allowParkour", "allowParkourPlace", "allowParkourAscend"
+    };
+
+    /**
+     * Turns on the movements that make a route possible, and remembers what they were.
+     *
+     * <p>All of them are off or unusable by default for good reasons that do not apply here: a
+     * pathfinder that pillars and parkours without being asked is a pathfinder that surprises
+     * people. Being asked is what this is.
+     */
+    private void borrow() {
+        if (!allowPlace.get() || !BaritoneBridge.isUsable()) return;
+
+        for (String name : BORROWED) {
+            Object before = BaritoneBridge.setting(name);
+            if (before == null) continue;
+
+            borrowed.put(name, before);
+            BaritoneBridge.setSetting(name, true);
         }
+        refreshThrowaway(System.currentTimeMillis());
+    }
+
+    private void giveBack() {
+        for (var entry : borrowed.entrySet()) BaritoneBridge.setSetting(entry.getKey(), entry.getValue());
+        borrowed.clear();
+    }
+
+    /**
+     * Offers Baritone the blocks actually in the pack as things it may throw down.
+     *
+     * <p>Its own list is dirt, cobblestone and netherrack. Nobody in the End is carrying any of
+     * those, so {@code allowPlace} was on and had nothing to place with - allowed and impossible
+     * at the same time, which is the worst of both. Read from the inventory rather than named,
+     * because what is in there is the only list that is ever right.
+     */
+    private void refreshThrowaway(long now) {
+        if (borrowed.isEmpty() || mc.player == null) return;
+        if (now - lastThrowaway < 5_000) return;
+        lastThrowaway = now;
+
+        List<net.minecraft.world.item.Item> blocks = new java.util.ArrayList<>();
+        for (int i = 0; i < mc.player.getInventory().getContainerSize(); i++) {
+            var stack = mc.player.getInventory().getItem(i);
+            if (stack.isEmpty() || stack.getCount() < 8) continue;
+            if (!(stack.getItem() instanceof net.minecraft.world.item.BlockItem)) continue;
+
+            // Not the job itself: bridging with the blocks you came to remove is a circle.
+            if (stack.getItem() instanceof net.minecraft.world.item.BlockItem item
+                && item.getBlock() == wanted) continue;
+
+            if (!blocks.contains(stack.getItem())) blocks.add(stack.getItem());
+        }
+
+        if (blocks.isEmpty()) return;
+        if (!borrowed.containsKey("acceptableThrowawayItems")) {
+            Object before = BaritoneBridge.setting("acceptableThrowawayItems");
+            if (before != null) borrowed.put("acceptableThrowawayItems", before);
+        }
+        BaritoneBridge.setSetting("acceptableThrowawayItems", blocks);
+
+        if (debug.get()) log("offered baritone %d block type(s) to bridge with", blocks.size());
     }
 
     // --- picking -------------------------------------------------------------
@@ -631,6 +718,8 @@ public class AutoBreak extends Module {
         // Not while Baritone has the controls. Walking is what takes a block out of reach half
         // way through a pair, and it is what puts your feet over a hole you started yourself -
         // both of which were being blamed on the mining. Stand still, break, move on.
+        if (digging()) return;
+
         if (!mineWhileWalking.get() && BaritoneBridge.isPathing()) {
             letGo();
 
@@ -682,6 +771,52 @@ public class AutoBreak extends Module {
 
         if (notify.get()) warning("Nothing has come down in a while; moving on.");
         return true;
+    }
+
+    /**
+     * Digs a way towards a block the pathfinder cannot reach.
+     *
+     * <p>Two blocks at head and foot height in the direction of the target, which is a corridor
+     * a player can walk down, and a jump when the way is clear but the ground is not. Nothing
+     * clever: the point is that a tunnel is a route nobody had to find, and Baritone is asked
+     * again the moment there is one.
+     *
+     * @return true when this tick was spent digging
+     */
+    private boolean digging() {
+        if (digTo == null) return false;
+
+        long now = System.currentTimeMillis();
+        if (now > digUntil || !isWanted(digTo) && !onLayer(digTo)) {
+            digTo = null;
+            lastScan = 0;
+            return false;
+        }
+
+        BlockPos feet = mc.player.blockPosition();
+        int dx = Integer.signum(digTo.getX() - feet.getX());
+        int dz = Integer.signum(digTo.getZ() - feet.getZ());
+        if (dx == 0 && dz == 0) {
+            digTo = null;
+            return false;
+        }
+
+        // The horizontal step, head first: a body-height hole you cannot see out of is a hole.
+        for (int level = 1; level >= 0; level--) {
+            BlockPos ahead = feet.offset(dx, level, dz);
+            if (mc.level.getBlockState(ahead).isAir()) continue;
+            if (supportsMe(ahead)) continue;
+            if (!Reach.canReach(mc, ahead, false, range.get())) continue;
+
+            mine(ahead);
+            return true;
+        }
+
+        // Nothing in the way at this height. If the target is above, climbing is the job, and
+        // Baritone with parkour and placing turned on is better at that than this is.
+        digTo = null;
+        lastScan = 0;
+        return false;
     }
 
     /** Drops served sentences, so the list cannot grow for the length of a session. */
@@ -1207,6 +1342,11 @@ public class AutoBreak extends Module {
                 walkTarget = null;
                 stillTicks = 0;
             } else if (BaritoneBridge.isPathing()) {
+                // It is moving, so whatever went before was a bad patch rather than a boxed-in
+                // player. Counting those forwards would have the module tunnelling for the rest
+                // of the run over three refusals half an hour ago.
+                refusedRoutes = 0;
+
                 if (!goingNowhere()) return;
 
                 // Pathing and not moving. A ledge it will not step off, a block it cannot get
@@ -1221,11 +1361,19 @@ public class AutoBreak extends Module {
 
                 BlockPos trap = Unstuck.find(mc, unstickCursor);
                 if (trap != null) mine(trap);
-            } else {
-                // Baritone stopped without getting us there, and said so by not pathing.
-                givenUp.put(walkTarget, System.currentTimeMillis() + GIVEN_UP_MS);
+            } else if (System.currentTimeMillis() - routeAt > ROUTE_GRACE_MS) {
+                // Not pathing, and long enough since it was asked that this is not the pause
+                // before it starts. Baritone gives up in milliseconds when there is nothing to
+                // walk on - the log says "open set size: 0" and nine nodes explored - so this is
+                // a refusal rather than an arrival.
+                givenUp.put(walkTarget.immutable(), System.currentTimeMillis() + GIVEN_UP_MS);
+                if (debug.get()) log("no route to %s", walkTarget);
+
+                refusedRoutes++;
                 walkTarget = null;
                 stillTicks = 0;
+            } else {
+                return;
             }
         }
 
@@ -1236,6 +1384,7 @@ public class AutoBreak extends Module {
         if (now - lastScan < SCAN_EVERY_MS) return;
         lastScan = now;
         prune(now);
+        refreshThrowaway(now);
 
         // Baritone measures its own y threshold from the player, so asking for the job's window
         // is not enough once you are below the job: the scan comes back empty, there is nowhere
@@ -1289,8 +1438,19 @@ public class AutoBreak extends Module {
             return;
         }
 
+        // Three routes refused in a row and the pathfinder is not going to find a fourth. Dig
+        // towards the block instead: a tunnel is a route nobody had to find.
+        if (digOut.get() && refusedRoutes >= REFUSALS_BEFORE_DIGGING) {
+            refusedRoutes = 0;
+            digTo = nearest;
+            digUntil = now + DIG_FOR_MS;
+            if (notify.get()) info("No way through; digging towards it.");
+            return;
+        }
+
         walkTarget = nearest;
         stillTicks = 0;
+        routeAt = now;
         stillAt = mc.player.position();
         BaritoneBridge.pathTo(nearest, walkRadius.get());
         if (debug.get()) log("walking to %s%s", nearest, bestPairs ? " (pairable)" : " (alone)");
@@ -1298,6 +1458,15 @@ public class AutoBreak extends Module {
 
     /** How long a block that could not be reached is left alone before being tried again. */
     private static final long GIVEN_UP_MS = 60_000;
+
+    /** Time a route is given to get going before not-pathing counts as a refusal. */
+    private static final long ROUTE_GRACE_MS = 2_000;
+
+    /** Refusals in a row before the way out is dug rather than walked. */
+    private static final int REFUSALS_BEFORE_DIGGING = 3;
+
+    /** How long one digging attempt runs before the pathfinder is asked again. */
+    private static final long DIG_FOR_MS = 8_000;
 
     /** Whether this block is serving its time, and cheap enough to ask inside a scan. */
     private boolean setAside(BlockPos pos) {
