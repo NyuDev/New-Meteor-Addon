@@ -132,13 +132,24 @@ public final class PlayerInv {
      * <p>Refuses while a chest or shulker is open, because putting a screen up there would close
      * it, and the run is in the middle of using it.
      *
-     * @return true when the inventory is up and its slots are the ones a click will reach
+     * <p>Carries on without it while any <em>other</em> screen is up - the chat, the pause menu,
+     * the inventory opened by hand. It used to refuse there too, which meant that opening chat
+     * or pressing Escape quietly stopped a resupply half way through: the moves waited for a
+     * screen that was not coming, and the run timed out. Since the screen is only for looking
+     * ordinary and the clicks work either way, the right answer is to skip the appearance and
+     * do the work. Automation that stalls because you pressed Escape is not automation.
+     *
+     * @return true when a click will reach the slots it is aimed at
      */
     public static boolean openInventory(Minecraft mc) {
         if (!useScreen) return true;
         if (mc.player.containerMenu != mc.player.inventoryMenu) return false;
+
+        // Somebody else's screen. Leave it alone - closing the chat somebody is typing into, to
+        // put up an inventory nobody asked for, would be a worse surprise than a missing screen.
+        if (mc.screen != null && !(mc.screen instanceof InventoryScreen)) return true;
+
         if (mc.screen == null) mc.setScreen(new InventoryScreen(mc.player));
-        if (!(mc.screen instanceof InventoryScreen)) return false;
 
         wantedAt = mc.level == null ? 0 : mc.level.getGameTime();
         return true;

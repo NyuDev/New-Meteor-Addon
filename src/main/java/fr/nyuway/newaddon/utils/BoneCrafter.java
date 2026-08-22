@@ -71,11 +71,16 @@ public final class BoneCrafter {
         return step != Step.IDLE;
     }
 
-    /** Whether the grid can be driven at all: our own menu, and no screen in the way. */
+    /**
+     * Whether the grid can be driven at all.
+     *
+     * <p>One condition, and it is the only one that matters: the open menu has to be the
+     * player's own, because that is where the two-by-two grid lives. A screen being up is not
+     * the same question - the chat and the pause menu leave the menu exactly where it was, and
+     * refusing to craft while either is open meant that opening chat stopped a run.
+     */
     public static boolean usable(Minecraft mc) {
-        return mc.player != null
-            && mc.screen == null
-            && mc.player.containerMenu == mc.player.inventoryMenu;
+        return mc.player != null && mc.player.containerMenu == mc.player.inventoryMenu;
     }
 
     /**

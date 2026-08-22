@@ -288,6 +288,7 @@ public class ElytraResupply extends Module {
     public void onActivate() {
         reset();
         loans.clear();
+        climbTo = null;
         takeoffFailures = 0;
         repairAvoidance();
         if (!BaritoneBridge.isPresent()) {
@@ -297,6 +298,8 @@ public class ElytraResupply extends Module {
 
     @Override
     public void onDeactivate() {
+        climbTo = null;
+
         // Last chance to hand the hotbar back. Normally this is paced a move per tick, but a
         // module being switched off has no next tick, and a burst of clicks that might get
         // resynced still beats leaving someone's sword in the wrong slot.
@@ -330,6 +333,9 @@ public class ElytraResupply extends Module {
     }
 
     private void reset() {
+        // Not the climb - reset() is called at the start of resume(), which is where a climb is
+        // set up a moment later, and clearing it there would undo it before it began.
+
         // Drop anything in-flight so a disable mid-routine leaves the player free, not stuck
         // in a container screen, holding jump, or on a stale phase.
         if (mc.player != null && isContainerOpen()) mc.player.closeContainer();
@@ -437,6 +443,10 @@ public class ElytraResupply extends Module {
             beginRun(true);
             return;
         }
+
+        // Before the phase check: a climb starts at the end of a run, so by the time it is
+        // happening the routine is idle again and would have returned already.
+        climb();
 
         if (phase == Phase.IDLE) {
             watchForLanding();
@@ -1741,6 +1751,66 @@ public class ElytraResupply extends Module {
         }
     }
 
+    /**
+     * Where a climb is heading, or null when there is no climb on.
+     *
+     * <p>Kept outside the phases on purpose. The climb begins at the moment the routine ends,
+     * and everything the routine holds is torn down there - so a phase would be cleared out
+     * from under it a tick later.
+     */
+    private BlockPos climbTo;
+    private int climbTicks;
+
+    /**
+     * Climbs to cruising height by handing Baritone the goal it already has, over and over.
+     *
+     * <p>Its elytra process gains altitude when it is given a destination afresh: it plans the
+     * next leg from where it is now, and from low down the only way through is up. Left alone it
+     * settles into whatever height the first plan happened to find, which after a resupply is
+     * ground level - and a flight at ground level meets every hill between here and there.
+     *
+     * <p>So the same goal goes out once a second until the height is reached, and then stops.
+     * The repetition is the whole mechanism and it is also the reason to stop: a solver asked to
+     * replan every second is a solver that never gets to finish thinking about the long way.
+     */
+    private void climb() {
+        if (climbTo == null) return;
+
+        if (mc.player == null || mc.level == null) {
+            climbTo = null;
+            return;
+        }
+
+        if (mc.player.getY() >= cfg.cruiseHeight.get()) {
+            if (cfg.debug.get()) log("cruising at y=%.0f after %d ticks", mc.player.getY(), climbTicks);
+            info("Up at cruising height.");
+            climbTo = null;
+            return;
+        }
+
+        // Back on the ground means the flight ended - a crash, a resupply, or an arrival. The
+        // routine owns what happens next, and none of it is helped by another goal.
+        if (mc.player.onGround() && climbTicks > 20) {
+            if (cfg.debug.get()) log("climb stopped: back on the ground");
+            climbTo = null;
+            return;
+        }
+
+        if (++climbTicks > cfg.climbTimeout.get()) {
+            warning("Could not get up to y=%d; flying on at y=%.0f.",
+                cfg.cruiseHeight.get(), mc.player.getY());
+            climbTo = null;
+            return;
+        }
+
+        if (climbTicks % cfg.climbInterval.get() != 0) return;
+
+        BaritoneBridge.elytraPathTo(climbTo);
+        if (cfg.debug.get() && climbTicks % 100 == 0) {
+            log("climbing: y=%.0f, %d ticks in", mc.player.getY(), climbTicks);
+        }
+    }
+
     private void resume() {
         // Put the pickaxe back where it was found, so the hotbar is left as we got it.
         if (pickaxeHomeSlot != -1) {
@@ -1762,6 +1832,13 @@ public class ElytraResupply extends Module {
         info("Resupplied. Flying on.");
         if (cfg.debug.get()) log("resuming to %s", target);
         BaritoneBridge.elytraPathTo(target);
+
+        // And keep handing it the same goal until it is up in the open air. Set after the reset
+        // above, which is what clears everything else the run was holding.
+        if (cfg.climb.get()) {
+            climbTo = target;
+            climbTicks = 0;
+        }
     }
 
     /**

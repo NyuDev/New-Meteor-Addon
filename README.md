@@ -654,6 +654,10 @@ the slot it came from → break the ender chest with Silk Touch → pick it up.
 | `trigger-key` | unbound | Start a resupply on the spot, while the module is on. |
 | `arrival-radius` | 150 | How close to the destination counts as arrived, for `disconnect-when-done`. |
 | `auto-relaunch` / `relaunch-delay` | on / 30 | Get airborne again after an accidental landing short of the destination. |
+| `climb` | on | After taking off again, keep re-issuing the same goal until you are at cruising height. |
+| `cruise-height` | 120 | The Y to climb to before leaving the flight alone. |
+| `climb-interval` | 20 | Ticks between two goals while climbing. |
+| `climb-timeout` | 900 | Ticks of climbing before flying on at whatever height was reached. |
 | `void-guard` / `void-margin` | on / 32 | Land on solid ground before the flight sinks past the void damage line, then carry on. |
 | `use-carried-first` | on | Spend what you already have before opening anything. |
 | `empty-hand-to-open` | on | Hold an empty slot to open a container; some servers require it. |
@@ -691,6 +695,33 @@ Every step is a server round trip (a block must appear, a container must open, a
 be collected), so this is a state machine with a timeout per phase. On any timeout it runs
 its cleanup path rather than stopping where it is, so a failure does not leave your ender
 chest sitting in the open.
+
+### Climbing back to cruising height
+
+Baritone's elytra process gains altitude when it is handed its destination afresh: it plans the
+next leg from where it is *now*, and from low down the only way through is up. Left alone after a
+resupply it settles into whatever height that first plan happened to find — which is ground level,
+and a flight at ground level meets every hill between here and there.
+
+So after taking off again the module hands it **the same goal** once a second until Y reaches
+`cruise-height`, then stops. The repetition is the whole mechanism, and it is also the reason to
+stop: a solver asked to replan every second never gets to finish thinking about the long way.
+The climb also ends if you land, or after `climb-timeout` — a ceiling or a mountain can make the
+target height unreachable, and never arriving is not a reason to never leave.
+
+### The chat and the pause menu do not stop it
+
+Opening chat or pressing Escape used to stall a resupply half way through. The inventory moves
+put the player's own inventory screen up first — not needed by the protocol, only so that a
+stream of slot clicks comes from somewhere a player could have produced it — and they refused to
+run while any other screen was up, waiting for a screen that was never coming. Same for the
+bone-meal crafting grid, which asked for no screen at all rather than asking the one question
+that matters, which is whether the open *menu* is still the player's own.
+
+Both now carry on. The clicks work either way, so when a screen you opened is up the appearance
+is skipped and the work is done — closing the chat somebody is typing into, to put up an
+inventory nobody asked for, would be the worse surprise. A chest or shulker being open still
+stops them, because that is a menu the run is in the middle of using.
 
 ## Supported versions
 

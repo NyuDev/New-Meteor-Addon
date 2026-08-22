@@ -41,6 +41,10 @@ public final class ResupplySettings {
     public final Setting<Integer> voidMargin;
     public final Setting<Boolean> autoRelaunch;
     public final Setting<Integer> relaunchDelay;
+    public final Setting<Boolean> climb;
+    public final Setting<Integer> cruiseHeight;
+    public final Setting<Integer> climbInterval;
+    public final Setting<Integer> climbTimeout;
     public final Setting<Boolean> releaseOnInput;
     public final Setting<Boolean> silentRotations;
     public final Setting<Keybind> triggerKey;
@@ -245,6 +249,44 @@ public final class ResupplySettings {
                          "destination. Baritone's elytra process does not take off by itself, " +
                          "so an accidental landing otherwise just leaves you standing there.")
             .defaultValue(true)
+            .build());
+
+        SettingGroup sgClimb = settings.createGroup("Climb");
+
+        climb = sgClimb.add(new BoolSetting.Builder()
+            .name("climb")
+            .description("After taking off again, keep re-issuing the same flight goal until you " +
+                         "are up at cruising height. Baritone's elytra process gains altitude " +
+                         "when it is handed its destination afresh, so repeating the goal it " +
+                         "already has is what lifts it - and once it is high the repetition " +
+                         "stops, because a flight in the open sky does not need it.")
+            .defaultValue(true)
+            .build());
+
+        cruiseHeight = sgClimb.add(new IntSetting.Builder()
+            .name("cruise-height")
+            .description("The Y to climb to before leaving the flight alone. Around 120 is high " +
+                         "enough to be clear of everything that gets in the way and low enough " +
+                         "to still be going somewhere.")
+            .defaultValue(120).min(64).max(320).sliderRange(80, 200)
+            .visible(climb::get)
+            .build());
+
+        climbInterval = sgClimb.add(new IntSetting.Builder()
+            .name("climb-interval")
+            .description("Ticks between two goals while climbing. Twenty is one a second; much " +
+                         "faster is not more lift, it is only more work for Baritone's solver.")
+            .defaultValue(20).min(2).max(200).sliderRange(5, 60)
+            .visible(climb::get)
+            .build());
+
+        climbTimeout = sgClimb.add(new IntSetting.Builder()
+            .name("climb-timeout")
+            .description("Ticks of climbing before giving up and flying on at whatever height " +
+                         "was reached. A ceiling, a mountain or a headwind can make the target " +
+                         "height unreachable, and never arriving is not a reason to never leave.")
+            .defaultValue(900).min(100).max(6000).sliderRange(200, 2400)
+            .visible(climb::get)
             .build());
 
         relaunchDelay = sgGeneral.add(new IntSetting.Builder()
