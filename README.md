@@ -709,6 +709,20 @@ stop: a solver asked to replan every second never gets to finish thinking about 
 The climb also ends if you land, or after `climb-timeout` — a ceiling or a mountain can make the
 target height unreachable, and never arriving is not a reason to never leave.
 
+### Who is holding the keys
+
+`release-on-input` gets out of the way the moment you grab the controls mid-run. It reads the
+movement bindings to decide — and **Baritone walks by forcing those same bindings down**, so
+while it is pathing they say "somebody is holding W" no matter who. That is a false alarm every
+time the module walks anywhere, and it walked to a dropped shulker, released control mid-run, and
+switched itself off. The keys are only the player's answer when Baritone is not pathing and no
+screen is up; somebody in the pause menu is by definition not steering.
+
+Releasing now **stands the run down rather than switching the module off**. Switching off was the
+tidier-looking answer and the wrong one: a module that is off never comes back, so one false
+alarm ended the trip and left the account parked wherever it happened to be. Idle still watches,
+so letting go of the keys is all it takes to have it carry on.
+
 ### The chat and the pause menu do not stop it
 
 Opening chat or pressing Escape used to stall a resupply half way through. The inventory moves

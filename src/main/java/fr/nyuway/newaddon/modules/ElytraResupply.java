@@ -380,7 +380,23 @@ public class ElytraResupply extends Module {
     }
 
     /** True when the player is actively steering, so the module should get out of the way. */
+    /**
+     * Whether the player is asking to move, as opposed to something else moving them.
+     *
+     * <h2>Baritone presses the same keys</h2>
+     * It walks by forcing the movement bindings down, so while it is pathing those keys say
+     * "somebody is holding W" no matter who. Read as manual input that is a false alarm every
+     * time the module walks anywhere - and it walked to a dropped shulker, released control
+     * mid-run, and switched itself off, leaving the account standing in the End doing nothing.
+     * While Baritone has the controls the keys are its answer, not the player's.
+     *
+     * <p>Same for a screen being up. A key can be left down when one opens, and somebody in the
+     * pause menu is by definition not steering.
+     */
     private boolean manualMovementRequested() {
+        if (mc.screen != null) return false;
+        if (BaritoneBridge.isPathing() || BaritoneBridge.isElytraActive()) return false;
+
         return mc.options.keyUp.isDown() || mc.options.keyDown.isDown()
             || mc.options.keyLeft.isDown() || mc.options.keyRight.isDown();
     }
@@ -423,11 +439,16 @@ public class ElytraResupply extends Module {
             return;
         }
 
-        // The moment the player grabs the controls mid-routine, bow out entirely and give the
-        // controls back. Scoped to an active routine so ordinary flight is left alone.
+        // The moment the player grabs the controls mid-routine, drop what the routine was doing
+        // and get out of the way. Scoped to an active routine so ordinary flight is left alone.
+        //
+        // Stand down rather than switch off. Switching off was the tidier-looking answer and the
+        // wrong one: a module that is off never comes back, so one false alarm ended the trip
+        // and left the account parked wherever it happened to be. Idle still watches, so letting
+        // go of the keys is all it takes to have it carry on.
         if (cfg.releaseOnInput.get() && phase != Phase.IDLE && manualMovementRequested()) {
             info("Releasing control.");
-            toggle();
+            reset();
             return;
         }
 

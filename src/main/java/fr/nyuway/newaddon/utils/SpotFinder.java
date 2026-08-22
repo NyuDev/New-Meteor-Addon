@@ -49,16 +49,27 @@ public final class SpotFinder {
     /**
      * Nearest usable spot, or null.
      *
-     * <p>Prefers ground ringed by solid floor so a dropped item cannot roll over an edge, then
-     * falls back to any valid spot: on a narrow ledge a slightly exposed placement still beats
-     * refusing to work and stranding the trip.
+     * <p>Three passes, from safest to any port in a storm. First a spot with floor two blocks
+     * out in every direction - properly inland, where a shulker broken open cannot throw an item
+     * over an edge. Then one block out, the old test. Then anything at all, because on a narrow
+     * ledge a slightly exposed placement still beats refusing to work and stranding the trip.
+     *
+     * <p>The wide pass exists because the middle one is not far enough in the End. A drop lands
+     * where it likes within a block or so of the broken block, and an island edge one block away
+     * is close enough for the difference between keeping an ender chest and watching it fall.
      */
     public BlockPos find(boolean forShulker) {
-        BlockPos ringed = sweep(forShulker, true);
-        return ringed != null ? ringed : sweep(forShulker, false);
+        for (int ring = 2; ring >= 1; ring--) {
+            BlockPos safe = sweep(forShulker, ring);
+            if (safe != null) return safe;
+        }
+        return sweep(forShulker, 0);
     }
 
-    private BlockPos sweep(boolean forShulker, boolean requireRinged) {
+    /**
+     * @param ring how far out the floor has to reach, or zero to not ask
+     */
+    private BlockPos sweep(boolean forShulker, int ring) {
         BlockPos feet = mc.player.blockPosition();
         BlockPos best = null;
         double bestDist = Double.MAX_VALUE;
@@ -69,7 +80,7 @@ public final class SpotFinder {
                 for (int dz = -reach; dz <= reach; dz++) {
                     scratch.set(feet.getX() + dx, feet.getY() + dy, feet.getZ() + dz);
                     if (!isUsable(scratch, forShulker)) continue;
-                    if (requireRinged && !isRingedByGround(scratch)) continue;
+                    if (ring > 0 && !isRingedByGround(scratch, ring)) continue;
 
                     // Close enough to actually click, not merely close enough to see.
                     double dist = mc.player.getEyePosition().distanceToSqr(
@@ -87,11 +98,11 @@ public final class SpotFinder {
         return best;
     }
 
-    /** True when the floor extends under all eight blocks around the spot, edge included. */
-    private boolean isRingedByGround(BlockPos pos) {
+    /** True when the floor extends under every block within {@code ring} of the spot. */
+    private boolean isRingedByGround(BlockPos pos, int ring) {
         BlockPos base = pos.below();
-        for (int dx = -1; dx <= 1; dx++) {
-            for (int dz = -1; dz <= 1; dz++) {
+        for (int dx = -ring; dx <= ring; dx++) {
+            for (int dz = -ring; dz <= ring; dz++) {
                 if (!isGround(mc.level.getBlockState(base.offset(dx, 0, dz)))) return false;
             }
         }
