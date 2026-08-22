@@ -326,6 +326,17 @@ public class AutoBreak extends Module {
         .defaultValue(false)
         .build());
 
+    private final Setting<Integer> settleMs = sgReplace.add(new IntSetting.Builder()
+        .name("settle-ms")
+        .description("How long to leave a hole alone before filling it. A block that has just " +
+                     "come down is still being mined as far as the server is concerned, and " +
+                     "obsidian put into that square is broken the instant it lands - which is " +
+                     "the pair's own second click going through and taking the replacement with " +
+                     "it. Waiting is the whole fix.")
+        .defaultValue(1200).min(0).max(10000).sliderRange(200, 3000)
+        .visible(replace::get)
+        .build());
+
     private final Setting<Boolean> waitForSupply = sgReplace.add(new BoolSetting.Builder()
         .name("wait-for-supply")
         .description("Stop mining when the obsidian runs out rather than carrying on and " +
@@ -510,11 +521,29 @@ public class AutoBreak extends Module {
         WAIT
     }
 
+    /**
+     * A hole waiting for obsidian, and the moment it is safe to fill.
+     *
+     * @param readyAt when the mining that made it can no longer break what goes back in
+     */
+    private record Hole(BlockPos pos, long readyAt) { }
+
     /** Holes waiting for obsidian, oldest first. */
-    private final java.util.ArrayDeque<BlockPos> holes = new java.util.ArrayDeque<>();
+    private final java.util.ArrayDeque<Hole> holes = new java.util.ArrayDeque<>();
 
     /** What was last said about waiting, so it is said once rather than every tick. */
     private boolean saidWaiting;
+
+    /** Attempts spent on the hole at the front of the queue. */
+    private int fillTries;
+
+    /**
+     * A block in reach that was refused only because it is under somebody's feet.
+     *
+     * <p>The floor guard says no and the job then has nothing to do, which reads as being stuck
+     * while standing on the very thing it came for. The answer is a step to one side.
+     */
+    private BlockPos stepAside;
 
     /** Where Baritone is taking us, if anywhere. */
     private BlockPos walkTarget;
@@ -590,6 +619,8 @@ public class AutoBreak extends Module {
         holdNow = holdMs.get();
         holes.clear();
         saidWaiting = false;
+        fillTries = 0;
+        stepAside = null;
         tries = 0;
         cleanPairs = 0;
         halfPairs = 0;
@@ -923,28 +954,59 @@ public class AutoBreak extends Module {
     private boolean fillHoles() {
         if (!replace.get() || holes.isEmpty()) return false;
 
+        long now = System.currentTimeMillis();
+
         while (!holes.isEmpty()) {
-            BlockPos hole = holes.peek();
+            Hole entry = holes.peek();
+            BlockPos hole = entry.pos();
+
+            // Still being mined, as far as the server is concerned. Obsidian put into a square
+            // the pair has an unfinished click on is broken the instant it lands - the pair's
+            // own mining goes through and takes the replacement with it. This is why the second
+            // block of a pair especially must be left alone: its click is the newer of the two.
+            if (hole.equals(first) || hole.equals(second) || now < entry.readyAt()) return false;
 
             // Filled already, by us or by anybody; or somewhere we are standing, which is a way
             // of burying yourself that nobody enjoys.
             if (!mc.level.getBlockState(hole).isAir()
                 || mc.player.getBoundingBox().intersects(new AABB(hole))
                 || !Reach.canReach(mc, hole, false, range.get())) {
-                holes.poll();
+                drop();
                 continue;
             }
 
             FindItemResult obsidian = InvUtils.findInHotbar(Items.OBSIDIAN);
             if (!obsidian.found()) {
-                PlayerInv.moveToHotbar(mc, stack -> stack.is(Items.OBSIDIAN));
+                if (PlayerInv.moveToHotbar(mc, stack -> stack.is(Items.OBSIDIAN))) return true;
+
+                // None anywhere. Not this hole's fault, and not something staring at it fixes.
+                return false;
+            }
+
+            // A hole in the middle of a floor that has already come up has no face left to click
+            // against, and the place is refused without a word. Reported here, because a
+            // refusal repeated every tick is a module that has stopped doing anything at all -
+            // which is exactly what it looked like: still, silent, and highlighting a block that
+            // was mined a minute ago.
+            if (Interactions.place(hole, obsidian, rotate.get(), false, swing.get(), false)) {
+                fillTries = 0;
                 return true;
             }
 
-            Interactions.place(hole, obsidian, rotate.get(), false, swing.get(), false);
-            return true;
+            if (++fillTries < FILL_TRIES) return false;
+            if (debug.get()) log("nothing to place %s against; leaving it", hole);
+            drop();
+            return false;
         }
         return false;
+    }
+
+    /** Attempts on one hole before it is left open. */
+    private static final int FILL_TRIES = 10;
+
+    private void drop() {
+        holes.poll();
+        fillTries = 0;
     }
 
     /**
@@ -957,9 +1019,11 @@ public class AutoBreak extends Module {
     private void noteHole(BlockPos pos) {
         if (!replace.get() || pos == null || mc.level == null) return;
         if (!mc.level.getBlockState(pos).isAir()) return;
-        if (holes.contains(pos)) return;
+        for (Hole hole : holes) {
+            if (hole.pos().equals(pos)) return;
+        }
 
-        holes.add(pos.immutable());
+        holes.add(new Hole(pos.immutable(), System.currentTimeMillis() + settleMs.get()));
         while (holes.size() > 32) holes.poll();
     }
 
@@ -1414,6 +1478,8 @@ public class AutoBreak extends Module {
     private BlockPos nearestInReach(BlockPos except) {
         if (mc.player == null || mc.level == null) return null;
 
+        stepAside = null;
+
         int r = Mth.ceil(range.get());
         BlockPos feet = mc.player.blockPosition();
         Vec3 eye = mc.player.getEyePosition();
@@ -1428,6 +1494,15 @@ public class AutoBreak extends Module {
                     cursor.set(feet.getX() + dx, feet.getY() + dy, feet.getZ() + dz);
 
                     if (except != null && cursor.equals(except)) continue;
+
+                    // Refused only because somebody is standing on it. Worth remembering: the
+                    // answer is a step to one side, not giving up on the block.
+                    if (onLayer(cursor) && isWanted(cursor) && supportsMe(cursor)
+                        && Reach.canReach(mc, cursor, false, range.get())) {
+                        if (stepAside == null) stepAside = cursor.immutable();
+                        continue;
+                    }
+
                     if (!workable(cursor)) continue;
                     if (setAside(cursor)) continue;
 
@@ -1522,6 +1597,23 @@ public class AutoBreak extends Module {
     /** Sends Baritone after the nearest one, or says there is nothing left. */
     private void goFind() {
         if (!walk.get() || !BaritoneBridge.isUsable()) return;
+
+        // Standing on the block we came to break. Nothing else is wrong: a step to one side and
+        // it is an ordinary target again, so that is the whole move.
+        if (stepAside != null && walkTarget == null && !BaritoneBridge.isPathing()) {
+            BlockPos beside = standingSpot(stepAside);
+            if (beside != null && !beside.equals(mc.player.blockPosition())) {
+                if (debug.get()) log("standing on %s; stepping to %s", stepAside, beside);
+                BaritoneBridge.pathTo(beside, 0);
+                walkTarget = stepAside;
+                stepAside = null;
+                routeAt = System.currentTimeMillis();
+                stillAt = mc.player.position();
+                stillTicks = 0;
+                return;
+            }
+            stepAside = null;
+        }
 
         if (walkTarget != null) {
             // Arrived, or the block went away while we were on our way to it.
@@ -1804,10 +1896,13 @@ public class AutoBreak extends Module {
     private void onRender(Render3DEvent event) {
         if (!render.get()) return;
 
-        if (first != null) {
+        // Only what is still there. A box drawn around a block that came down a minute ago is
+        // the single most misleading thing this module can put on the screen: it says the job is
+        // working on that block, which is exactly the thing to doubt when nothing is happening.
+        if (first != null && isWanted(first)) {
             event.renderer.box(first, sideColor.get(), lineColor.get(), shapeMode.get(), 0);
         }
-        if (second != null) {
+        if (second != null && isWanted(second)) {
             event.renderer.box(second, sideColor.get(), lineColor.get(), shapeMode.get(), 0);
         }
     }

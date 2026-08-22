@@ -95,6 +95,7 @@ and look at it instead.
 | `dig-out` | on | Mine towards the next block when no route exists at all. |
 | `replace` | off | Put obsidian back in the hole. |
 | `wait-for-supply` | on | Stop mining when the obsidian runs out. |
+| `settle-ms` | 1200 | How long to leave a hole alone before filling it. |
 | `search-chunks` | 8 | How far to look for more. |
 | `y-range` | 4 | How far above or below the working layer to consider. |
 | `fight-back` | on | Hit hostile mobs that come within reach. |
@@ -221,6 +222,27 @@ comes past again.
 
 **`wait-for-supply`** stops mining when the obsidian runs out, rather than carrying on and leaving
 holes. ObsidianSupply fills the gap; this is what stops the job running ahead of it.
+
+**A hole is left alone until the mining that made it has finished.** A block that has just come
+down is still being mined as far as the server is concerned, so obsidian put into that square is
+broken the instant it lands — the pair's own click goes through and takes the replacement with it.
+The second block of a pair is the worst case, its click being the newer of the two, so neither of
+the pair's squares is ever filled while the pair is in hand, and `settle-ms` keeps the rest
+waiting after that.
+
+A hole in the middle of a floor that has already come up has **no face left to click against**,
+and the game refuses the placement without a word. That refusal is given up on after ten tries
+and the hole is left open, because a refusal repeated every tick is a module that has stopped
+doing anything at all — still, silent, and highlighting a block mined a minute ago. For the same
+reason the outline is only drawn around blocks that are **still there**: a box around a block that
+is gone says the job is working on it, which is the one thing to doubt when nothing is happening.
+
+### Standing on the block you came for
+
+The floor guard says no, and then the job has nothing left to do — which reads as being stuck
+while standing on the very thing it came for. A block refused *only* because somebody is standing
+on it is now remembered, and the answer is a step to one side rather than giving up on it: it
+paths to a square beside the block and carries on.
 
 ### Standing beside the block, never on it
 
