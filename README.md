@@ -151,6 +151,26 @@ far as it goes and pairs are still half-breaking, `solo-fallback` stops pairing 
 one at a time — half a pair over and over is the trick not working, and one block at a time still
 clears the job.
 
+### Never insisting
+
+Whether a block can be worked is asked **every tick**, and reach is part of the question. It used
+to be asked once, when the block was picked, and never again — so walking to the first block of a
+pair could leave the second out of range, and the module would press on it for ever: nothing came
+down, the hold doubled and doubled, and the job stopped on a block that could not have been
+reached from where the player was standing. Nothing about a block is permanent once the player
+moves, so a block that has drifted out of reach simply drops out of the pair and the cycle
+carries on.
+
+A pair that runs out of retries, or a route that could not be walked, puts its blocks aside for a
+minute. Without that the very next pick takes the same block straight back and the whole thing
+happens again — which is what "stuck" looks like from outside, since the module is busy the entire
+time.
+
+And above all of it, one rule that does not care why: **a minute without a single block coming
+down** and the current targets are set aside, the route is dropped, and it looks somewhere else.
+Every individual failure has its own way out; this is the one that catches the combinations
+nobody thought of.
+
 ### Getting there, and staying there
 
 Baritone reports pathing perfectly happily while walking into a wall, so "is this working" is

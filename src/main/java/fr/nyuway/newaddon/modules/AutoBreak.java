@@ -442,6 +442,9 @@ public class AutoBreak extends Module {
     /** Last seen hurt frame, to catch the tick damage lands on. */
     private int lastHurt;
 
+    /** When a block last actually came down, so a job that is going nowhere can say so. */
+    private long lastBreak;
+
     /** Baritone's own block-placing setting, put back when the module is switched off. */
     private Object placeBefore;
 
@@ -481,6 +484,7 @@ public class AutoBreak extends Module {
         stillTicks = 0;
         stillAt = null;
         lastHurt = 0;
+        lastBreak = System.currentTimeMillis();
         givenUp.clear();
 
         // Borrowed, and given back in onDeactivate. Turning somebody's pathfinder setting on and
@@ -573,8 +577,55 @@ public class AutoBreak extends Module {
             return;
         }
 
+        if (nothingIsHappening()) return;
+
         if (mode.get() == Mode.SpeedMine) tickPair();
         else tickOne();
+    }
+
+    /** How long a job may go without a single block coming down before it is prodded. */
+    private static final long STALL_MS = 60_000;
+
+    /**
+     * Notices a job that has stopped making progress, and moves it along.
+     *
+     * <p>Every individual thing here has its own way out - a pair times out, a route is given
+     * up on, a block that cannot be reached is dropped. This is the one that catches the
+     * combinations nobody thought of: whatever the reason, a minute without a single block
+     * coming down is not a job in progress, and the answer is always the same. Put the current
+     * targets aside, let go of the route, and look somewhere else.
+     *
+     * @return true when this tick was spent doing that rather than mining
+     */
+    private boolean nothingIsHappening() {
+        long now = System.currentTimeMillis();
+        if (now - lastBreak < STALL_MS) return false;
+
+        lastBreak = now;
+        long until = now + GIVEN_UP_MS;
+        if (first != null) givenUp.put(first.immutable(), until);
+        if (second != null) givenUp.put(second.immutable(), until);
+        if (walkTarget != null) givenUp.put(walkTarget.immutable(), until);
+
+        stopBreaking();
+        clearPair();
+
+        if (walkTarget != null) {
+            BaritoneBridge.cancel();
+            walkTarget = null;
+        }
+
+        stillTicks = 0;
+        lastScan = 0;
+        prune(now);
+
+        if (notify.get()) warning("Nothing has come down in a while; moving on.");
+        return true;
+    }
+
+    /** Drops served sentences, so the list cannot grow for the length of a session. */
+    private void prune(long now) {
+        givenUp.entrySet().removeIf(entry -> entry.getValue() < now);
     }
 
     /**
@@ -673,7 +724,7 @@ public class AutoBreak extends Module {
 
     /** One block, faced and held until it breaks, then the next. */
     private void tickOne() {
-        if (first != null && !isWanted(first)) first = null;
+        if (first != null && !workable(first)) first = null;
         if (first == null) first = nearestInReach(null);
 
         if (first == null) {
@@ -702,10 +753,18 @@ public class AutoBreak extends Module {
 
         long now = System.currentTimeMillis();
 
-        // Either half can vanish at any moment - broken by us, by the other client, or by
-        // somebody else entirely - so both are checked before anything is done with them.
-        if (first != null && !isWanted(first)) first = null;
-        if (second != null && !isWanted(second)) second = null;
+        // Either half can stop being ours at any moment - broken by us, by the other client, by
+        // somebody else, or simply left behind by a step - so both are checked before anything
+        // is done with them. Out of reach counts: insisting on a block the server will not
+        // accept is not persistence, it is a stall.
+        if (first != null && !workable(first)) first = null;
+        if (second != null && !workable(second)) second = null;
+
+        // Nothing left in hand part way through. Start over rather than carrying an empty pair
+        // through the rest of the cycle, which used to sit in WAIT until it timed out.
+        if (first == null && second == null && stage != Stage.PICK && stage != Stage.WAIT) {
+            clearPair();
+        }
 
         switch (stage) {
             case PICK -> {
@@ -787,6 +846,15 @@ public class AutoBreak extends Module {
                         return;
                     }
                 }
+
+                // Out of attempts. Whatever is left is put aside for a while, or the very next
+                // pick takes it straight back and the whole thing happens again - which is what
+                // "stuck" looks like from the outside, since the module is busy the entire time.
+                long until = System.currentTimeMillis() + GIVEN_UP_MS;
+                if (first != null) givenUp.put(first.immutable(), until);
+                if (second != null) givenUp.put(second.immutable(), until);
+                if (debug.get()) log("giving up on the pair for now");
+
                 clearPair();
             }
         }
@@ -819,6 +887,8 @@ public class AutoBreak extends Module {
      * is the pair being answered one block at a time, and no amount of waiting fixes that.
      */
     private void settle(int broke) {
+        if (broke > 0) lastBreak = System.currentTimeMillis();
+
         if (broke == 1) halfPairs++;
         else if (broke == 2) halfPairs = 0;
 
@@ -966,6 +1036,20 @@ public class AutoBreak extends Module {
 
     // --- finding -------------------------------------------------------------
 
+    /**
+     * Whether a block is still worth holding on to: the right kind, safe, and within reach.
+     *
+     * <p>Reach is the half that was missing. It used to be asked once, when the block was
+     * picked, and never again - so a step in any direction could leave the pair pressing on
+     * something the server was never going to accept. Which is exactly what happened: walking to
+     * the first block took the second out of range, nothing came down, the hold doubled and
+     * doubled, and the job stopped on a block that could not have been reached from where the
+     * player was standing. Nothing about a block is permanent when the player moves.
+     */
+    private boolean workable(BlockPos pos) {
+        return isWanted(pos) && !supportsMe(pos) && Reach.canReach(mc, pos, false, range.get());
+    }
+
     private boolean isWanted(BlockPos pos) {
         if (pos == null || mc.level == null) return false;
 
@@ -996,9 +1080,8 @@ public class AutoBreak extends Module {
                     cursor.set(feet.getX() + dx, feet.getY() + dy, feet.getZ() + dz);
 
                     if (except != null && cursor.equals(except)) continue;
-                    if (!isWanted(cursor)) continue;
-                    if (supportsMe(cursor)) continue;
-                    if (!Reach.canReach(mc, cursor, false, range.get())) continue;
+                    if (!workable(cursor)) continue;
+                    if (setAside(cursor)) continue;
 
                     double dist = eye.distanceToSqr(
                         cursor.getX() + 0.5, cursor.getY() + 0.5, cursor.getZ() + 0.5);
@@ -1072,6 +1155,7 @@ public class AutoBreak extends Module {
         long now = System.currentTimeMillis();
         if (now - lastScan < SCAN_EVERY_MS) return;
         lastScan = now;
+        prune(now);
 
         List<BlockPos> found = BaritoneBridge.scanFor(
             wanted, 64, yRange.get(), searchChunks.get());
@@ -1085,8 +1169,7 @@ public class AutoBreak extends Module {
         for (BlockPos pos : found) {
             if (supportsMe(pos)) continue;
 
-            Long until = givenUp.get(pos);
-            if (until != null && now < until) continue;
+            if (setAside(pos)) continue;
 
             // A block with a neighbour of its own kind can be mined as a pair; a lone one never
             // can. Walking to the edge of a job and working inwards is slower for no reason, so
@@ -1113,6 +1196,14 @@ public class AutoBreak extends Module {
 
     /** How long a block that could not be reached is left alone before being tried again. */
     private static final long GIVEN_UP_MS = 60_000;
+
+    /** Whether this block is serving its time, and cheap enough to ask inside a scan. */
+    private boolean setAside(BlockPos pos) {
+        if (givenUp.isEmpty()) return false;
+
+        Long until = givenUp.get(pos);
+        return until != null && System.currentTimeMillis() < until;
+    }
 
     /**
      * Whether Baritone is pathing but we are not actually going anywhere.
