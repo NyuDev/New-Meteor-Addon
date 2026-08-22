@@ -89,6 +89,16 @@ import java.util.List;
  */
 public class AutoBreak extends Module {
 
+    /** Whose floor is not to be taken away. */
+    public enum Protect {
+        /** Only yours. */
+        Nobody,
+        /** Yours, and anyone on Meteor's friend list - which is what your other accounts are. */
+        Friends,
+        /** Yours and everybody's. */
+        Everybody
+    }
+
     /** How to break. */
     public enum Mode {
         /** Face it, hold, wait. One block at a time. */
@@ -384,6 +394,16 @@ public class AutoBreak extends Module {
                      "was safe when the pair started is not safe once you have drifted one step " +
                      "while it was counting down.")
         .defaultValue(1).min(0).max(3).sliderRange(0, 2)
+        .visible(noSpleef::get)
+        .build());
+
+    private final Setting<Protect> protect = sgSafety.add(new EnumSetting.Builder<Protect>()
+        .name("protect")
+        .description("Whose floor no-spleef covers besides your own. Friends by default, which " +
+                     "is what your other accounts are: a job that drops the bot working beside " +
+                     "you has cost you two bots, and neither of them was in the way. Everybody " +
+                     "extends that to strangers, and Nobody keeps it to yourself.")
+        .defaultValue(Protect.Friends)
         .visible(noSpleef::get)
         .build());
 
@@ -729,6 +749,9 @@ public class AutoBreak extends Module {
         pickHeld = pick;
 
         if (wanted == null) return;
+
+        // Before anything asks whose floor is whose.
+        refreshFootings();
 
         watchForAttack();
 
@@ -1421,27 +1444,76 @@ public class AutoBreak extends Module {
     }
 
     /**
-     * Whether breaking this would drop us.
+     * One person's floor: the level under their feet and the square around it.
      *
-     * <p>The block under the feet, across the whole footprint, since standing on the edge of two
-     * blocks means either of them counts. Everything else is fair game - a job whose blocks
-     * happen to be the floor is common, and the only part of that floor worth protecting is the
-     * part currently holding somebody up.
+     * @param y the block level being stood on
+     */
+    private record Footing(int y, int minX, int maxX, int minZ, int maxZ) {
+        private boolean covers(BlockPos pos) {
+            return pos.getY() == y
+                && pos.getX() >= minX && pos.getX() <= maxX
+                && pos.getZ() >= minZ && pos.getZ() <= maxZ;
+        }
+    }
+
+    /**
+     * The floors not to be taken away, worked out once a tick.
+     *
+     * <p>Once a tick rather than per block, because the search asks about a thousand positions
+     * and the answer is the same for all of them. It is a handful of small records; rebuilding
+     * it is cheaper than the list of players it is built from.
+     */
+    private final List<Footing> footings = new java.util.ArrayList<>();
+
+    private void refreshFootings() {
+        footings.clear();
+        if (!noSpleef.get() || mc.player == null || mc.level == null) return;
+
+        footings.add(footingOf(mc.player));
+        if (protect.get() == Protect.Nobody) return;
+
+        // Only the ones near enough to be standing on something this job might touch. Everybody
+        // else on the server is not in the way and never will be.
+        double limit = range.get() + spleefMargin.get() + 4;
+        for (var other : mc.level.players()) {
+            if (other == mc.player || !other.isAlive()) continue;
+            if (mc.player.distanceToSqr(other) > limit * limit) continue;
+
+            if (protect.get() == Protect.Friends
+                && !meteordevelopment.meteorclient.systems.friends.Friends.get().isFriend(other)) {
+                continue;
+            }
+            footings.add(footingOf(other));
+        }
+    }
+
+    private Footing footingOf(net.minecraft.world.entity.player.Player who) {
+        AABB box = who.getBoundingBox();
+        int margin = spleefMargin.get();
+
+        return new Footing(
+            Mth.floor(box.minY - 0.06),
+            Mth.floor(box.minX) - margin, Mth.floor(box.maxX) + margin,
+            Mth.floor(box.minZ) - margin, Mth.floor(box.maxZ) + margin);
+    }
+
+    /**
+     * Whether breaking this would drop somebody.
+     *
+     * <p>The block under the feet, across the whole footprint plus a margin: standing on the
+     * edge of two blocks means either of them counts, and a pair takes seconds to come down
+     * during which nobody stands perfectly still.
+     *
+     * <p>Not only your own feet. Two accounts working the same floor is the ordinary way to use
+     * any of this, and a job that drops the bot beside you has cost you two bots - neither of
+     * which was in the way. Everything else is fair game: a job whose blocks happen to be the
+     * floor is common, and the only part worth protecting is the part holding somebody up.
      */
     private boolean supportsMe(BlockPos pos) {
-        if (!noSpleef.get() || mc.player == null) return false;
-
-        AABB box = mc.player.getBoundingBox();
-        if (pos.getY() != Mth.floor(box.minY - 0.06)) return false;
-
-        // The footprint, plus a margin. The block exactly under you was never the whole danger:
-        // a pair takes seconds to come down and you do not stand perfectly still for them, so
-        // the block that was one step away when it was started is under your feet when it goes.
-        int margin = spleefMargin.get();
-        return pos.getX() >= Mth.floor(box.minX) - margin
-            && pos.getX() <= Mth.floor(box.maxX) + margin
-            && pos.getZ() >= Mth.floor(box.minZ) - margin
-            && pos.getZ() <= Mth.floor(box.maxZ) + margin;
+        for (int i = 0; i < footings.size(); i++) {
+            if (footings.get(i).covers(pos)) return true;
+        }
+        return false;
     }
 
     /** Ticks between two chunk scans, when the last one found nowhere to go. */

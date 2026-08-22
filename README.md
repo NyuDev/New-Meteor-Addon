@@ -103,7 +103,8 @@ and look at it instead.
 | `pause-while-using` | on | Stop mining while eating, drinking or drawing a bow. |
 | `logout-on-attack` | off | Disconnect when a player or an end crystal hurts you. |
 | `no-spleef` | on | Never break the floor you are on, or could step onto. |
-| `spleef-margin` | 1 | How far around your feet the floor is protected. |
+| `spleef-margin` | 1 | How far around the feet the floor is protected. |
+| `protect` | Friends | Whose floor besides your own: Nobody, Friends, Everybody. |
 | `mine-while-walking` | off | Keep mining while Baritone is taking you somewhere. |
 | `stop-on-teleport` | on | Switch off when you are moved somewhere you did not walk to. |
 | `teleport-distance` | 16 | How far in one tick counts as being moved rather than walking. |
@@ -181,6 +182,13 @@ since a route that goes nowhere can only be noticed during the walk.
 underneath was never the whole danger: a pair takes seconds to come down and nobody stands
 perfectly still for them, so the block that was one step away when it was started is under your
 feet when it goes.
+
+And **not only your own feet**. Two accounts working the same floor is the ordinary way to use
+any of this — SpeedMine exists for exactly that — so a job that drops the bot beside you has cost
+you two bots, neither of which was in the way. `protect` decides whose: **Friends** by default,
+which is what your other accounts are, `Everybody` to extend it to strangers, `Nobody` to keep it
+to yourself. The floors are worked out once a tick rather than per block, since the search asks
+about a thousand positions and the answer is the same for all of them.
 
 ### Never insisting
 
