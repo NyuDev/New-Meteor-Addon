@@ -276,9 +276,18 @@ public class AutoBreak extends Module {
 
     private final Setting<Integer> yRange = sgWalk.add(new IntSetting.Builder()
         .name("y-range")
-        .description("How far up or down to consider. Keeps a job on this floor from wandering " +
-                     "into the one below it.")
-        .defaultValue(32).min(4).max(256).sliderRange(8, 128)
+        .description("How far above or below the working layer to consider. One for a job that " +
+                     "is a single floor; more when the blocks are stacked.")
+        .defaultValue(4).min(0).max(256).sliderRange(0, 32)
+        .build());
+
+    private final Setting<Boolean> lockLayer = sgWalk.add(new BoolSetting.Builder()
+        .name("lock-layer")
+        .description("Measure y-range from the block you picked rather than from wherever you " +
+                     "are standing now. Falling off a platform otherwise takes the whole job " +
+                     "down with you: the window follows your feet, the floor below becomes the " +
+                     "job, and there is nothing left telling you to climb back.")
+        .defaultValue(true)
         .build());
 
     // --- combat ----------------------------------------------------------------
@@ -326,10 +335,29 @@ public class AutoBreak extends Module {
 
     private final Setting<Boolean> noSpleef = sgSafety.add(new BoolSetting.Builder()
         .name("no-spleef")
-        .description("Never break the block holding you up. Without it, a job whose blocks are " +
-                     "the floor ends with you in the hole, which on 2b2t is usually the end of " +
-                     "the trip rather than an inconvenience.")
+        .description("Never break the floor you are standing on, or the floor you could step " +
+                     "onto next. Without it, a job whose blocks are the floor ends with you in " +
+                     "the hole, which on 2b2t is usually the end of the trip rather than an " +
+                     "inconvenience.")
         .defaultValue(true)
+        .build());
+
+    private final Setting<Integer> spleefMargin = sgSafety.add(new IntSetting.Builder()
+        .name("spleef-margin")
+        .description("How far around your feet the floor is protected. One is the square you " +
+                     "could step onto without meaning to - which matters, because a block that " +
+                     "was safe when the pair started is not safe once you have drifted one step " +
+                     "while it was counting down.")
+        .defaultValue(1).min(0).max(3).sliderRange(0, 2)
+        .visible(noSpleef::get)
+        .build());
+
+    private final Setting<Boolean> mineWhileWalking = sgSafety.add(new BoolSetting.Builder()
+        .name("mine-while-walking")
+        .description("Keep mining while Baritone is taking you somewhere. Off: walking is what " +
+                     "takes a block out of reach half way through a pair, and it is what puts " +
+                     "your feet over a hole you started. Stand still, break, move on.")
+        .defaultValue(false)
         .build());
 
     private final Setting<Boolean> stopOnTeleport = sgSafety.add(new BoolSetting.Builder()
@@ -379,6 +407,15 @@ public class AutoBreak extends Module {
 
     /** The kind of block to break. Null until something has been picked. */
     private Block wanted;
+
+    /**
+     * The height the job is on, taken from the block that was picked.
+     *
+     * <p>Null until something is picked, and the whole reason falling off a platform is no
+     * longer the end of a job: with the window measured from here rather than from the player,
+     * the blocks worth going to are still up there, so Baritone is asked to climb back to them.
+     */
+    private Integer workY;
 
     /** Where the two halves of a pair are, and how far through it we are. */
     private BlockPos first;
@@ -458,6 +495,7 @@ public class AutoBreak extends Module {
         if (wanted == null) return "pick one";
 
         String name = wanted.getName().getString();
+        if (lockLayer.get() && workY != null) name += " y" + workY;
         if (mode.get() != Mode.SpeedMine) return name;
         if (solo) return name + " (solo)";
 
@@ -468,6 +506,7 @@ public class AutoBreak extends Module {
     @Override
     public void onActivate() {
         wanted = null;
+        workY = null;
         clearPair();
         walkTarget = null;
         lastPos = mc.player == null ? null : mc.player.position();
@@ -531,13 +570,23 @@ public class AutoBreak extends Module {
         Block block = event.blockState.getBlock();
         if (block == Blocks.AIR) return;
 
-        adopt(block);
+        // The block under the crosshair is the one being activated, and its height is the layer
+        // the job is on. Taken here rather than from the player, who may be standing on it, in
+        // it, or a step below it.
+        adopt(block, lookingAt());
     }
 
-    private void adopt(Block block) {
+    private void adopt(Block block, BlockPos at) {
         wanted = block;
+        workY = at == null ? (mc.player == null ? null : mc.player.blockPosition().getY()) : at.getY();
         clearPair();
-        if (notify.get()) info("Breaking %s.", block.getName().getString());
+        givenUp.clear();
+        lastBreak = System.currentTimeMillis();
+
+        if (notify.get()) {
+            info("Breaking %s%s.", block.getName().getString(),
+                workY == null ? "" : " at y " + workY);
+        }
     }
 
     // --- the work ------------------------------------------------------------
@@ -556,7 +605,7 @@ public class AutoBreak extends Module {
         boolean pick = pickKey.get().isSet() && pickKey.get().isPressed();
         if (pick && !pickHeld && mc.screen == null) {
             BlockPos looking = lookingAt();
-            if (looking != null) adopt(mc.level.getBlockState(looking).getBlock());
+            if (looking != null) adopt(mc.level.getBlockState(looking).getBlock(), looking);
         }
         pickHeld = pick;
 
@@ -578,6 +627,18 @@ public class AutoBreak extends Module {
         }
 
         if (nothingIsHappening()) return;
+
+        // Not while Baritone has the controls. Walking is what takes a block out of reach half
+        // way through a pair, and it is what puts your feet over a hole you started yourself -
+        // both of which were being blamed on the mining. Stand still, break, move on.
+        if (!mineWhileWalking.get() && BaritoneBridge.isPathing()) {
+            letGo();
+
+            // Still watched while walking: a route that goes nowhere has to be noticed during
+            // the walk, which is the only time it can be.
+            goFind();
+            return;
+        }
 
         if (mode.get() == Mode.SpeedMine) tickPair();
         else tickOne();
@@ -1047,7 +1108,20 @@ public class AutoBreak extends Module {
      * player was standing. Nothing about a block is permanent when the player moves.
      */
     private boolean workable(BlockPos pos) {
-        return isWanted(pos) && !supportsMe(pos) && Reach.canReach(mc, pos, false, range.get());
+        return onLayer(pos) && isWanted(pos) && !supportsMe(pos)
+            && Reach.canReach(mc, pos, false, range.get());
+    }
+
+    /**
+     * Whether a block is on the layer the job is on.
+     *
+     * <p>Measured from the block that was picked, not from the player's feet. That difference is
+     * the whole of it: a window that follows you down means the floor below becomes the job the
+     * moment you fall onto it, and nothing is left saying the work is up there.
+     */
+    private boolean onLayer(BlockPos pos) {
+        if (!lockLayer.get() || workY == null) return true;
+        return Math.abs(pos.getY() - workY) <= yRange.get();
     }
 
     private boolean isWanted(BlockPos pos) {
@@ -1109,8 +1183,14 @@ public class AutoBreak extends Module {
         AABB box = mc.player.getBoundingBox();
         if (pos.getY() != Mth.floor(box.minY - 0.06)) return false;
 
-        return pos.getX() >= Mth.floor(box.minX) && pos.getX() <= Mth.floor(box.maxX)
-            && pos.getZ() >= Mth.floor(box.minZ) && pos.getZ() <= Mth.floor(box.maxZ);
+        // The footprint, plus a margin. The block exactly under you was never the whole danger:
+        // a pair takes seconds to come down and you do not stand perfectly still for them, so
+        // the block that was one step away when it was started is under your feet when it goes.
+        int margin = spleefMargin.get();
+        return pos.getX() >= Mth.floor(box.minX) - margin
+            && pos.getX() <= Mth.floor(box.maxX) + margin
+            && pos.getZ() >= Mth.floor(box.minZ) - margin
+            && pos.getZ() <= Mth.floor(box.maxZ) + margin;
     }
 
     /** Ticks between two chunk scans, when the last one found nowhere to go. */
@@ -1157,8 +1237,15 @@ public class AutoBreak extends Module {
         lastScan = now;
         prune(now);
 
-        List<BlockPos> found = BaritoneBridge.scanFor(
-            wanted, 64, yRange.get(), searchChunks.get());
+        // Baritone measures its own y threshold from the player, so asking for the job's window
+        // is not enough once you are below the job: the scan comes back empty, there is nowhere
+        // to walk, and nothing ever asks to climb. So the window asked for covers the gap.
+        int reachUp = yRange.get() + 8;
+        if (lockLayer.get() && workY != null && mc.player != null) {
+            reachUp += Math.abs(mc.player.blockPosition().getY() - workY);
+        }
+
+        List<BlockPos> found = BaritoneBridge.scanFor(wanted, 128, reachUp, searchChunks.get());
         if (found.isEmpty()) return;
 
         BlockPos player = mc.player.blockPosition();
@@ -1166,9 +1253,15 @@ public class AutoBreak extends Module {
         double best = Double.MAX_VALUE;
         boolean bestPairs = false;
 
-        for (BlockPos pos : found) {
-            if (supportsMe(pos)) continue;
+        // Two passes' worth of information in one: whether anything at all was on the layer, so
+        // a list where every candidate is merely serving a sentence can be forgiven rather than
+        // leaving the module with nowhere to go and no way of ever having somewhere to go.
+        boolean sawSomething = false;
 
+        for (BlockPos pos : found) {
+            if (!onLayer(pos) || supportsMe(pos)) continue;
+
+            sawSomething = true;
             if (setAside(pos)) continue;
 
             // A block with a neighbour of its own kind can be mined as a pair; a lone one never
@@ -1185,7 +1278,16 @@ public class AutoBreak extends Module {
             bestPairs = pairs;
         }
 
-        if (nearest == null) return;
+        if (nearest == null) {
+            // Everything on the layer is set aside. Better to try them again than to stand still
+            // for ever: a sentence exists to stop the same block being retried immediately, not
+            // to take blocks out of the job permanently.
+            if (sawSomething && !givenUp.isEmpty()) {
+                if (debug.get()) log("nothing left but blocks set aside; letting them out");
+                givenUp.clear();
+            }
+            return;
+        }
 
         walkTarget = nearest;
         stillTicks = 0;

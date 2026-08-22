@@ -89,16 +89,19 @@ and look at it instead.
 | `walk` | on | Use Baritone to reach the next one. |
 | `walk-radius` | 1 | How close Baritone has to get before this takes over. |
 | `pair-first` | on | Prefer a block that has another of its kind beside it. |
+| `lock-layer` | on | Measure `y-range` from the block you picked, not from your feet. |
 | `stuck-ticks` | 60 | Ticks of pathing without moving before the route is given up on. |
 | `allow-place` | on | Let Baritone place blocks to get somewhere, restored on switch-off. |
 | `search-chunks` | 8 | How far to look for more. |
-| `y-range` | 32 | How far up or down to consider. |
+| `y-range` | 4 | How far above or below the working layer to consider. |
 | `fight-back` | on | Hit hostile mobs that come within reach. |
 | `fight-range` | 5 | How close one has to be to be worth turning on. |
 | `pause-while-fighting` | on | Stop mining while there is something to hit. |
 | `pause-while-using` | on | Stop mining while eating, drinking or drawing a bow. |
 | `logout-on-attack` | off | Disconnect when a player or an end crystal hurts you. |
-| `no-spleef` | on | Never break the block holding you up. |
+| `no-spleef` | on | Never break the floor you are on, or could step onto. |
+| `spleef-margin` | 1 | How far around your feet the floor is protected. |
+| `mine-while-walking` | off | Keep mining while Baritone is taking you somewhere. |
 | `stop-on-teleport` | on | Switch off when you are moved somewhere you did not walk to. |
 | `teleport-distance` | 16 | How far in one tick counts as being moved rather than walking. |
 
@@ -150,6 +153,31 @@ being answered one block at a time, and no amount of waiting fixes it. When the 
 far as it goes and pairs are still half-breaking, `solo-fallback` stops pairing and finishes them
 one at a time — half a pair over and over is the trick not working, and one block at a time still
 clears the job.
+
+### The layer is where you picked it, not where your feet are
+
+`y-range` used to be measured from the player. Fall off a platform and the window falls with
+you: the floor below becomes the job, there is nothing left saying the work is up there, and the
+bot settles in happily one storey down. With `y-range` set small — one, for a job that is a
+single floor — falling instead makes the scan come back empty, so there is nowhere to walk, and
+nothing ever asks it to climb.
+
+**`lock-layer`** takes the height from the block you picked and keeps it. Blocks off the layer
+stop being candidates, so going down is no longer something the job can want; and the scan asks
+Baritone for a window wide enough to see the layer *from below*, so getting back up is a route
+it can be given. The layer shows next to the module name.
+
+### Standing still to work
+
+**`mine-while-walking`** is off. Walking is what takes a block out of reach half way through a
+pair, and it is what puts your feet over a hole you started yourself — both of which looked like
+mining bugs and were not. Stand still, break, move on. The route is still watched while walking,
+since a route that goes nowhere can only be noticed during the walk.
+
+**`no-spleef`** protects the floor under your feet **and a margin around it**. The block exactly
+underneath was never the whole danger: a pair takes seconds to come down and nobody stands
+perfectly still for them, so the block that was one step away when it was started is under your
+feet when it goes.
 
 ### Never insisting
 
@@ -204,11 +232,6 @@ by default because leaving is a decision. The damage source arrives from the ser
 itself, so this is what actually hit you rather than a guess from who happens to be standing
 about. Mobs deliberately do not count — a creeper is not a reason to lose your place, and
 fight-back is the answer to those.
-
-**`no-spleef`** refuses any block under your feet, across your whole footprint, since standing on
-the edge of two blocks means either could be the one holding you up. Everything else is fair game
-— a job whose blocks happen to be the floor is common, and the only part of that floor worth
-protecting is the part currently supporting somebody.
 
 ## StasisPull
 
