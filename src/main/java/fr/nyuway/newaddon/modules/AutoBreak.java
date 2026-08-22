@@ -340,8 +340,8 @@ public class AutoBreak extends Module {
     private final Setting<Boolean> waitForSupply = sgReplace.add(new BoolSetting.Builder()
         .name("wait-for-supply")
         .description("Stop mining when the obsidian runs out rather than carrying on and " +
-                     "leaving holes. ObsidianSupply is what fills the gap; this is what stops " +
-                     "the job running ahead of it.")
+                     "leaving holes, and ask ObsidianSupply for more. Waiting on its own is not " +
+                     "a plan - somebody has to go and make some.")
         .defaultValue(true)
         .visible(replace::get)
         .build());
@@ -799,11 +799,28 @@ public class AutoBreak extends Module {
             return;
         }
 
+        // A supply run has the world to itself. It places, breaks and picks things up a few
+        // blocks away, and a mining job walking off mid-run is how a chest gets left standing.
+        ObsidianSupply supply = ObsidianSupply.get();
+        if (supply != null && supply.isBusy()) {
+            letGo();
+            return;
+        }
+
         if (outOfObsidian()) {
             letGo();
+
+            // Ask, rather than wait. Waiting was the honest half of the answer and the useless
+            // half: nothing was ever going to arrive on its own.
+            boolean coming = supply != null && supply.request(true);
             if (notify.get() && !saidWaiting) {
                 saidWaiting = true;
-                warning("Out of obsidian; waiting rather than leaving holes.");
+                if (coming) info("Out of obsidian; making more.");
+                else if (supply == null || !supply.isActive()) {
+                    warning("Out of obsidian, and obsidian-supply is off. Switch it on.");
+                } else {
+                    warning("Out of obsidian, and out of ender chests to make any from.");
+                }
             }
             return;
         }

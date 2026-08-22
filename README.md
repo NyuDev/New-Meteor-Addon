@@ -220,8 +220,11 @@ filled is forgotten, and a hole you are standing in is skipped — burying yours
 a job that nobody enjoys. A hole that drifted out of reach is dropped rather than queued; the job
 comes past again.
 
-**`wait-for-supply`** stops mining when the obsidian runs out, rather than carrying on and leaving
-holes. ObsidianSupply fills the gap; this is what stops the job running ahead of it.
+**`wait-for-supply`** stops mining when the obsidian runs out **and asks ObsidianSupply for more**.
+Waiting on its own was the honest half of the answer and the useless half: nothing was ever going
+to arrive by itself. A supply run also gets the world to itself — it places, breaks and picks
+things up a few blocks away, and a mining job walking off mid-run is how a chest ends up left
+standing.
 
 **A hole is left alone until the mining that made it has finished.** A block that has just come
 down is still being mined as far as the server is concerned, so obsidian put into that square is
@@ -325,6 +328,16 @@ sight, which is the point.
 | `auto-obsidian` / `min-obsidian` / `target-obsidian` | on / 32 / 128 | Make more when it runs low, and how much to carry. |
 | `auto-chests` / `min-chests` / `target-chests` | on / 8 / 64 | Fetch more ender chests, and how many to carry. |
 | `refill-obsidian` / `refill-chests` | none | Do either now, whatever the counts say. |
+
+**The next chest goes back into the same square.** A block placed where one has just been broken
+comes apart almost at once — the progress for that position is already there — so the loop runs at
+the speed of *placing* rather than the speed of mining obsidian. Hunting a fresh spot each time
+would be slower and would spread the work over ground that has to be checked again.
+
+**Nothing moves on while the obsidian is still on the floor.** Leaving it is the one outcome this
+module cannot have: the whole reason to be doing any of this is that there is no more of it. And
+when the chests run out mid-run it switches to fetching chests rather than stopping — that is the
+same problem one step further back, not a different one.
 
 **The pickaxe is checked before every chest.** Silk Touch is exactly the wrong tool here — it
 gives the chest back rather than the obsidian, so the loop would run for ever turning one chest

@@ -175,6 +175,20 @@ public class ObsidianSupply extends Module {
         return phase != Phase.IDLE;
     }
 
+    /**
+     * Asks for a run, from another module rather than from a key.
+     *
+     * @param obsidian true for obsidian, false for ender chests
+     * @return true when a run is now under way, including one that was already going
+     */
+    public boolean request(boolean obsidian) {
+        if (!isActive()) return false;
+        if (isBusy()) return true;
+
+        start(obsidian);
+        return isBusy();
+    }
+
     @Override
     public String getInfoString() {
         if (phase == Phase.IDLE) return obsidian() + " obby";
@@ -301,6 +315,18 @@ public class ObsidianSupply extends Module {
             return;
         }
 
+        // Still usable, and still empty: put the next one straight back into it. This is the
+        // rebreak - the square has just had a block taken out of it, so the next one placed
+        // there comes apart almost at once.
+        if (chestPos != null && mc.level.getBlockState(chestPos).isAir()
+            && !mc.player.getBoundingBox().intersects(new net.minecraft.world.phys.AABB(chestPos))) {
+            FindItemResult again = InvUtils.findInHotbar(Items.ENDER_CHEST);
+            if (again.found()) {
+                Interactions.place(chestPos, again, true, false, true, false);
+                return;
+            }
+        }
+
         if (!PlayerInv.moveToHotbar(mc, stack -> stack.is(Items.ENDER_CHEST))) {
             error("Could not get an ender chest into the hotbar.");
             recoverOrStop();
@@ -347,29 +373,48 @@ public class ObsidianSupply extends Module {
         Interactions.mine(mc, chestPos, false, true);
     }
 
-    /** Waits for the drop to be picked up, rather than walking off and leaving eight obsidian. */
+    /**
+     * Waits for the eight obsidian to be picked up, then puts the next chest in the same square.
+     *
+     * <p>The same square on purpose. A block placed where one was just broken is re-broken
+     * almost instantly - the client already has the progress for that position - so the loop
+     * runs at the speed of placing rather than the speed of mining obsidian. Finding a fresh
+     * spot each time would be slower and would spread the work over ground that has to be
+     * checked again.
+     *
+     * <p>Nothing moves on while the obsidian is still on the floor. Leaving it there is the one
+     * outcome this module cannot have: the whole reason to be doing any of this is that there
+     * is no more of it.
+     */
     private void collect() {
         returnPickaxe();
 
-        if (nothingOnTheGround()) {
-            if (forObsidian && obsidian() < targetObsidian.get() && chests() > 0) {
-                chestPos = null;
-                to(Phase.PLACE_CHEST);
+        if (!nothingOnTheGround()) {
+            // Standing still is enough - the drop is at our feet and the pickup radius does the
+            // rest. Patience here is cheap and the alternative is losing eight obsidian.
+            if (phaseTicks < 120) return;
+
+            if (debug.get()) log("drop has not come to us; carrying on without it");
+        }
+
+        if (forObsidian && obsidian() < targetObsidian.get()) {
+            if (chests() == 0) {
+                if (notify.get()) {
+                    warning("Out of ender chests at %d obsidian; fetching more.", obsidian());
+                }
+                forObsidian = false;
+                to(Phase.PLACE_STORE);
                 return;
             }
 
-            if (notify.get()) info("Carrying %d obsidian.", obsidian());
-            to(Phase.IDLE);
+            // Back in the same hole, which is what makes the next one break at once.
+            to(Phase.PLACE_CHEST);
             return;
         }
 
-        // Standing still next to it is enough; the pickup radius does the rest. Walking to it is
-        // what the elytra routine needs and this does not - the drop is at our feet.
-        if (phaseTicks > 60) {
-            if (debug.get()) log("drop is taking its time; carrying on");
-            chestPos = null;
-            to(forObsidian && obsidian() < targetObsidian.get() ? Phase.PLACE_CHEST : Phase.IDLE);
-        }
+        if (notify.get()) info("Carrying %d obsidian.", obsidian());
+        chestPos = null;
+        to(Phase.IDLE);
     }
 
     private boolean nothingOnTheGround() {
