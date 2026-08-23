@@ -995,6 +995,14 @@ when the server goes is the one moment where nothing can be done about anything.
 | `resume-after-restart` | on | Take off and carry on once the world settles. |
 | `resume-delay` | 200 | Ticks of settled world before flying on. |
 
+**Nothing anybody types counts.** Player chat arrives rendered, name and all — `<somebody> text`
+— and the brackets and the name are put there by the server rather than typed, so a player cannot
+produce a line without them. Any line that looks like that is refused outright, and the warning
+has to appear near the *start* of what is left, with only enough slack for a timestamp prefix.
+The same guard covers Baritone's emergency-landing line, which additionally has to carry
+Baritone's own name: both of these are things people say in chat, and one of them lands the bot
+while the other holds its takeoff.
+
 Whatever the routine was doing is **dropped** rather than aborted into a resupply, the
 destination is captured first, and it comes down — by cancelling the flight, since holding a key
 on the way down is how a landing becomes a crash. Once down and still it looks at the ground

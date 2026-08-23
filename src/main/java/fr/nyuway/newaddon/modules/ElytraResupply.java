@@ -379,19 +379,55 @@ public class ElytraResupply extends Module {
      */
     @EventHandler
     private void onMessage(meteordevelopment.meteorclient.events.game.ReceiveMessageEvent event) {
-        String text = event.getMessage().getString();
-        if (text.contains("Emergency landing") || text.contains("emergency landing")) {
+        String text = event.getMessage().getString().trim();
+
+        // Nothing anybody types counts. Both of the things read out of chat here are things
+        // somebody could say on purpose, and one of them lands the bot and the other stops it
+        // taking off - so "who said it" is the first question, not an afterthought.
+        if (fromAPlayer(text)) return;
+
+        // Baritone's own line, which carries its name. Without that a passing "emergency
+        // landing" in chat would hold the takeoff for twenty seconds.
+        if (text.contains("Baritone") && text.toLowerCase(java.util.Locale.ROOT)
+                .contains("emergency landing")) {
             emergencyAt = System.currentTimeMillis();
         }
 
         if (!cfg.landOnRestart.get() || restartHold) return;
 
         for (String warning : cfg.restartWarnings.get()) {
-            if (warning.isBlank() || !text.contains(warning)) continue;
+            // Near the start of the line rather than anywhere in it, with room for a prefix -
+            // the timestamp mods put one there, so a strict startsWith would match nothing at
+            // all on a client that shows the time. A name and brackets are longer than that
+            // allowance, and are refused by the check above regardless.
+            if (warning.isBlank()) continue;
+
+            int at = text.indexOf(warning);
+            if (at < 0 || at > PREFIX_ALLOWANCE) continue;
 
             beginRestartHold();
             return;
         }
+    }
+
+    /** How much of a prefix - a timestamp, say - may sit before the server's own words. */
+    private static final int PREFIX_ALLOWANCE = 16;
+
+    /**
+     * Whether a chat line was typed by somebody rather than sent by the server.
+     *
+     * <p>Player chat arrives rendered, name and all - {@code <somebody> text}. The brackets and
+     * the name are put there by the server rather than typed, so a player cannot produce a line
+     * without them, and cannot produce one that starts with anything else. That is the whole
+     * test, and it is worth having: the two lines read out of chat here land the bot and hold
+     * its takeoff, and both are things people say.
+     */
+    private static boolean fromAPlayer(String text) {
+        int open = text.indexOf('<');
+        if (open < 0 || open > 8) return false;
+
+        int close = text.indexOf('>', open);
+        return close > open && close - open <= 20;
     }
 
     // --- riding out a restart ----------------------------------------------------
