@@ -967,6 +967,18 @@ stop: a solver asked to replan every second never gets to finish thinking about 
 The climb also ends if you land, or after `climb-timeout` — a ceiling or a mountain can make the
 target height unreachable, and never arriving is not a reason to never leave.
 
+**It only nudges a flight that is already under way.** Handing the elytra process a destination
+during a takeoff makes it cancel what it was doing, and being cancelled mid-takeoff puts you back
+on the ground — which starts a relaunch, which takes off, which resumes, which hands it another
+destination. That loop ran at four seconds a lap. So the goal only goes out while actually
+gliding, while the routine has nothing else on, and while the elytra process is already active;
+on the ground it is a goal nobody can act on, and part way through a jump it is that cancel.
+
+A **relaunch-loop guard** sits under all of it: more than five takeoffs inside fifteen seconds and
+it stands down for a minute and says so. The existing counter could not see this, being cleared
+the moment both feet leave the ground — which a loop that takes off successfully every time and
+comes straight back down does on every pass. Time is what tells a rough patch from a circle.
+
 ### Who is holding the keys
 
 `release-on-input` gets out of the way the moment you grab the controls mid-run. It reads the

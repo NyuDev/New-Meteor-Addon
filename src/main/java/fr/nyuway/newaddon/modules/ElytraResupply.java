@@ -294,6 +294,9 @@ public class ElytraResupply extends Module {
         climbTo = null;
         takeoffFailures = 0;
         rollbacks = 0;
+        relaunchBurst = 0;
+        lastRelaunchAt = 0;
+        standDownUntil = 0;
         repairAvoidance();
         if (!BaritoneBridge.isPresent()) {
             warning("This needs Meteor's Baritone fork; nothing will happen without it.");
@@ -717,6 +720,8 @@ public class ElytraResupply extends Module {
                 // is mid-flight while standing still will not accept a fresh destination, and
                 // RESUME hands it one the moment we are airborne again.
                 if (elytraActive) BaritoneBridge.cancel();
+
+                if (relaunchingInCircles()) return;
 
                 info("Back in the air.");
                 if (cfg.debug.get()) {
@@ -1810,17 +1815,30 @@ public class ElytraResupply extends Module {
             return;
         }
 
+        // Not while the routine is doing anything. Handing the elytra process a destination
+        // during a takeoff makes it cancel what it was doing, and being cancelled mid-takeoff
+        // puts you back on the ground - which starts a relaunch, which takes off, which
+        // resumes, which hands it another destination. That was the loop: back in the air,
+        // flying on, back in the air, every four seconds, for as long as anybody watched.
+        if (phase != Phase.IDLE) return;
+
+        // And not until the wings are actually out. Gliding is the only state where a fresh
+        // destination costs nothing: on the ground it is a goal nobody can act on, and part way
+        // through a jump it is the cancel described above.
+        if (!mc.player.isFallFlying()) {
+            // Down for good, rather than mid-hop. The flight is over and the routine owns what
+            // happens next; none of it is helped by another goal.
+            if (mc.player.onGround() && ++groundedClimbTicks > GROUNDED_ENOUGH) {
+                if (cfg.debug.get()) log("climb stopped: back on the ground");
+                climbTo = null;
+            }
+            return;
+        }
+        groundedClimbTicks = 0;
+
         if (mc.player.getY() >= cfg.cruiseHeight.get()) {
             if (cfg.debug.get()) log("cruising at y=%.0f after %d ticks", mc.player.getY(), climbTicks);
             info("Up at cruising height.");
-            climbTo = null;
-            return;
-        }
-
-        // Back on the ground means the flight ended - a crash, a resupply, or an arrival. The
-        // routine owns what happens next, and none of it is helped by another goal.
-        if (mc.player.onGround() && climbTicks > 20) {
-            if (cfg.debug.get()) log("climb stopped: back on the ground");
             climbTo = null;
             return;
         }
@@ -1834,11 +1852,62 @@ public class ElytraResupply extends Module {
 
         if (climbTicks % cfg.climbInterval.get() != 0) return;
 
+        // Only ever a nudge to a flight already under way. Starting one from here is what the
+        // resume did a moment ago, and doing it twice is how the two ended up fighting.
+        if (!BaritoneBridge.isElytraActive()) return;
+
         BaritoneBridge.elytraPathTo(climbTo);
         if (cfg.debug.get() && climbTicks % 100 == 0) {
             log("climbing: y=%.0f, %d ticks in", mc.player.getY(), climbTicks);
         }
     }
+
+    /** Relaunches close enough together to be a loop rather than a rough patch. */
+    private static final long BURST_WINDOW_MS = 15_000;
+
+    /** How many of those before the module stops taking off and says so. */
+    private static final int BURST_LIMIT = 5;
+
+    /** How long it stands down for after deciding it is going in circles. */
+    private static final long STAND_DOWN_MS = 60_000;
+
+    private long lastRelaunchAt;
+    private int relaunchBurst;
+    private long standDownUntil;
+
+    /**
+     * Whether taking off again would be the same thing that has just not worked, five times.
+     *
+     * <h2>Why the existing counter could not see it</h2>
+     * {@code relaunchTries} is cleared the moment both feet leave the ground, on the reasoning
+     * that getting airborne means whatever was tried worked. It does - and a loop that takes off
+     * successfully every time and comes straight back down clears it on every pass, so a counter
+     * that only ever reached one described an evening of it. Time is the thing that tells a rough
+     * patch from a circle, so time is what this counts.
+     *
+     * @return true when the caller should do nothing at all this tick
+     */
+    private boolean relaunchingInCircles() {
+        long now = System.currentTimeMillis();
+        if (now < standDownUntil) return true;
+
+        relaunchBurst = now - lastRelaunchAt < BURST_WINDOW_MS ? relaunchBurst + 1 : 1;
+        lastRelaunchAt = now;
+
+        if (relaunchBurst <= BURST_LIMIT) return false;
+
+        relaunchBurst = 0;
+        standDownUntil = now + STAND_DOWN_MS;
+        warning("Taking off and landing over and over; leaving it alone for a minute.");
+        reset();
+        return true;
+    }
+
+    /** Ticks on the ground before a climb is called off rather than waited out. */
+    private static final int GROUNDED_ENOUGH = 40;
+
+    /** How long we have been on the ground during a climb, so a hop does not end it. */
+    private int groundedClimbTicks;
 
     /**
      * Counts what the run came for, a moment after it finished.
@@ -1920,6 +1989,7 @@ public class ElytraResupply extends Module {
         if (cfg.climb.get()) {
             climbTo = target;
             climbTicks = 0;
+            groundedClimbTicks = 0;
         }
     }
 
