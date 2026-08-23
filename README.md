@@ -429,8 +429,9 @@ is delegated to StasisPull, so whichever transport you set there is what gets us
 | --- | --- | --- |
 | `disable-autolog` | on | Switch Meteor's AutoLog off, so you aren't pulled *and* disconnected. |
 | `toggle-off` | on | Turn off after a pull instead of firing repeatedly. |
-| `void` | on | Pull the instant you are low enough to take void damage. |
-| `void-y-auto` | on | Work the height out from the dimension rather than a fixed number. |
+| `void` | on | Pull the instant the void actually hurts you. |
+| `void-height-too` | off | Also pull on height alone, without waiting to be hurt. |
+| `void-y-auto` | on | Work that height out from the dimension rather than a fixed number. |
 | `void-y` | -128 | Manual height, used when `void-y-auto` is off. |
 | `health` / `health-level` | on / 8 | Pull at or below this health. |
 | `count-absorption` | on | Count golden-apple absorption as health. |
@@ -442,14 +443,21 @@ is delegated to StasisPull, so whichever transport you set there is what gets us
 **The void trigger is checked before every other one and is not gated by anything**, because
 void damage kills straight through a totem — there is nothing to weigh up.
 
-The height is dimension-dependent, not one fixed number: vanilla starts void damage 64 below
-the world floor, so roughly **-128 in the Overworld** (floor -64) but **-64 in the Nether and
-the End** (floor 0). `void-y-auto` works that out for you.
+It fires on **the first tick of void damage**, read from the damage the server sent rather than
+guessed from the height, so it is the void that pulls you and not merely being low down. Being
+under the world is ordinary — a stasis chamber lives down there, and flying beneath an island is
+a route — and firing on the height alone meant never being able to do either. Being *hurt* by it
+is not ordinary, and is only ever a few seconds from being fatal.
 
-> Firing exactly on the damage line is likely **too late in practice**. A pull is a round trip
-> to your bot while void damage is already ticking. If you want this to actually save you,
-> turn `void-y-auto` off and set `void-y` well above the damage line — around **-40** in the
-> Overworld — so it fires during the fall instead.
+`void-height-too` puts the height back as well, for anyone who would rather leave before the
+first hit lands than after it. That height is dimension-dependent, not one fixed number: vanilla
+starts void damage 64 below the world floor, so roughly **-128 in the Overworld** (floor -64) but
+**-64 in the Nether and the End** (floor 0), which `void-y-auto` works out for you.
+
+> With the height trigger on, firing exactly *at* the damage line is likely too late in practice:
+> a pull is a round trip to your bot while damage is already ticking. Turn `void-y-auto` off and
+> set `void-y` well above the line — around **-40** in the Overworld — so it fires during the
+> fall instead.
 
 Both totem modes require an actual pop (vanilla `ENTITY_EVENT` id 35), never a bare inventory
 scan. `Remaining` recounts your totems (hotbar, storage, armor, offhand) a couple of ticks

@@ -87,10 +87,21 @@ public class AutoStasisPull extends Module {
 
     private final Setting<Boolean> voidTrigger = sgTriggers.add(new BoolSetting.Builder()
         .name("void")
-        .description("Pull the instant you are low enough to take void damage. On by default " +
-                     "and checked before every other trigger, because void damage kills " +
-                     "straight through a totem.")
+        .description("Pull the instant the void actually hurts you. The first tick of void " +
+                     "damage, not the height it starts at: being below the line is survivable " +
+                     "and ordinary - a stasis chamber sits under the world, and flying under an " +
+                     "island is a route - while being hurt by it is neither. Checked before " +
+                     "every other trigger, because the void kills straight through a totem.")
         .defaultValue(true)
+        .build());
+
+    private final Setting<Boolean> voidHeightToo = sgTriggers.add(new BoolSetting.Builder()
+        .name("void-height-too")
+        .description("Also pull on height alone, without waiting to be hurt. Off: the height " +
+                     "is where damage becomes possible, not where it happens, and pulling on it " +
+                     "means never being able to go under the world on purpose.")
+        .defaultValue(false)
+        .visible(voidTrigger::get)
         .build());
 
     private final Setting<Boolean> voidAuto = sgTriggers.add(new BoolSetting.Builder()
@@ -99,7 +110,7 @@ public class AutoStasisPull extends Module {
                      "Vanilla starts void damage 64 below the world floor, which is about " +
                      "-128 in the Overworld but -64 in the Nether and the End.")
         .defaultValue(true)
-        .visible(voidTrigger::get)
+        .visible(() -> voidTrigger.get() && voidHeightToo.get())
         .build());
 
     private final Setting<Integer> voidY = sgTriggers.add(new IntSetting.Builder()
@@ -107,7 +118,7 @@ public class AutoStasisPull extends Module {
         .description("Height to pull at when the automatic one is off. Set it well above the " +
                      "damage line to leave the bot time to answer.")
         .defaultValue(-128).min(-256).max(320).sliderMin(-160).sliderMax(64)
-        .visible(() -> voidTrigger.get() && !voidAuto.get())
+        .visible(() -> voidTrigger.get() && voidHeightToo.get() && !voidAuto.get())
         .build());
 
     private final Setting<Boolean> healthTrigger = sgTriggers.add(new BoolSetting.Builder()
@@ -247,7 +258,19 @@ public class AutoStasisPull extends Module {
         // Checked before everything else, and without any of the usual gating. A totem does
         // not save you from void damage - it kills through them - so there is nothing to
         // weigh up: either the pull happens now or it does not happen.
-        if (voidTrigger.get() && mc.player.getY() < voidThreshold()) {
+        //
+        // The trigger is the first tick of damage rather than the height it becomes possible
+        // at. Being under the world is ordinary - a stasis chamber lives down there and flying
+        // beneath an island is a route - and pulling on the height alone meant never being able
+        // to do either. Being hurt by it is not ordinary, and it is only ever a few seconds
+        // from being fatal.
+        if (voidTrigger.get() && tookVoidDamage()) {
+            fire("void damage",
+                String.format("y %.1f in %s", mc.player.getY(), mc.level.dimension()));
+            return;
+        }
+
+        if (voidTrigger.get() && voidHeightToo.get() && mc.player.getY() < voidThreshold()) {
             fire("falling out of the world",
                 String.format("y %.1f, void damage below %.0f in %s", mc.player.getY(),
                     voidThreshold(), mc.level.dimension()));
@@ -285,6 +308,32 @@ public class AutoStasisPull extends Module {
     }
 
     /** Height at or below which to pull, from the dimension or from the manual setting. */
+    /**
+     * Whether the void has just hurt us.
+     *
+     * <p>Read from the damage the server sent rather than guessed from the height, so it is the
+     * void that pulls us and not merely being low down. The source arrives with the hurt itself
+     * on every version this builds for, and {@code fell_out_of_world} is the void's own damage
+     * type - the same one that ignores totems, which is why this is checked first of all.
+     *
+     * <p>The height is still available underneath, as its own setting, for anyone who would
+     * rather leave before the first hit lands than after it.
+     */
+    private boolean tookVoidDamage() {
+        int hurt = mc.player.hurtTime;
+        int before = lastHurtTime;
+        lastHurtTime = hurt;
+
+        if (hurt <= before) return false;
+
+        var source = mc.player.getLastDamageSource();
+        return source != null
+            && source.is(net.minecraft.world.damagesource.DamageTypes.FELL_OUT_OF_WORLD);
+    }
+
+    /** Last seen hurt frame, to catch the tick damage lands on rather than the ones after it. */
+    private int lastHurtTime;
+
     private double voidThreshold() {
         return voidAuto.get() ? WorldBounds.voidDamageY(mc.level) : voidY.get();
     }
