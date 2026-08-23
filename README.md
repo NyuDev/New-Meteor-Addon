@@ -315,6 +315,35 @@ itself, so this is what actually hit you rather than a guess from who happens to
 about. Mobs deliberately do not count — a creeper is not a reason to lose your place, and
 fight-back is the answer to those.
 
+## AutoVault
+
+A vault in a trial chamber spins an item above itself, and that item is the one it is about to
+give you — it changes every second or so until somebody puts a key in. So the whole game is
+patience: wait for the display to come round to a heavy core, and only then spend the key. This
+does the waiting and the timing, which are the two parts a person is bad at; a second of reaction
+time is most of the window.
+
+| Setting | Default | |
+| --- | --- | --- |
+| `wanted` | Heavy Core | Only spend a key when the vault shows one of these. |
+| `vaults` | Any | `Any`, `Ominous` or `Normal`. |
+| `range` | 4.5 | How far a vault can be and still be used. |
+| `rotate` | on | Turn to face it first. |
+| `delay` | 20 | Ticks between two uses. |
+| `restore-slot` | on | Put the hotbar selection back afterwards. |
+
+**Which key is read off the block**, so `Any` uses an ominous key on an ominous vault and an
+ordinary one on the rest without being told which is which — spending the wrong one is a wasted
+trip to the hotbar at exactly the moment the display is about to change. A vault already unlocking
+or throwing its loot out is skipped, since a key put in then buys nothing.
+
+It does not open vaults on its own, walk to them, or hoard keys: it clicks one vault, once, when
+what it shows is on the list. The outline draws matches in green and everything else in grey, so
+you can see it deciding.
+
+Vaults arrived in **1.21**, so on the two older versions this addon builds for the module loads
+and says so rather than pretending to work.
+
 ## ObsidianSupply
 
 An ender chest broken **without** Silk Touch drops eight obsidian, and an ender chest is the one
