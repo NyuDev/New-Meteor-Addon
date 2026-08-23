@@ -300,6 +300,7 @@ public class ElytraResupply extends Module {
         takeoffFailures = 0;
         rollbacks = 0;
         verifyAt = 0;
+        emergencyAt = 0;
         relaunchBurst = 0;
         lastRelaunchAt = 0;
         standDownUntil = 0;
@@ -343,6 +344,36 @@ public class ElytraResupply extends Module {
         BaritoneBridge.setSetting(AVOIDANCE, 0.2);
         warning("Reset Baritone's %s from %s to 0.2; an earlier build of this module set it "
             + "and it was stopping elytra flights from advancing.", AVOIDANCE, d);
+    }
+
+    /** How long Baritone saying "emergency landing" keeps counting as a reason not to take off. */
+    private static final long EMERGENCY_WINDOW_MS = 20_000;
+
+    /** When Baritone last said it was putting down because it was nearly out. */
+    private long emergencyAt;
+
+    /**
+     * Hears Baritone announce an emergency landing, and believes it.
+     *
+     * <h2>Why its opinion beats ours</h2>
+     * The module has its own idea of low - a count against {@code min-fireworks} - and Baritone
+     * has its own, and Baritone's fires first. So there is a band where it has decided it cannot
+     * safely fly on and this had decided nothing was wrong: it relaunched, Baritone emergency
+     * landed again a few seconds later, and between the two the last of the fireworks went. Being
+     * put down deliberately is a fact about the flight, not an opinion about the inventory, and
+     * arguing with it costs exactly the supplies the argument is about.
+     */
+    @EventHandler
+    private void onMessage(meteordevelopment.meteorclient.events.game.ReceiveMessageEvent event) {
+        String text = event.getMessage().getString();
+        if (text.contains("Emergency landing") || text.contains("emergency landing")) {
+            emergencyAt = System.currentTimeMillis();
+        }
+    }
+
+    /** Whether Baritone has recently said it was putting down because it was nearly out. */
+    private boolean recentEmergency() {
+        return System.currentTimeMillis() - emergencyAt < EMERGENCY_WINDOW_MS;
     }
 
     private void reset() {
@@ -689,11 +720,21 @@ public class ElytraResupply extends Module {
         boolean lowFireworks = PlayerInv.count(mc, Items.FIREWORK_ROCKET) <= cfg.minFireworks.get();
         boolean equippedDamaged = PlayerInv.wornElytraDurability(mc) < cfg.minElytraDurability.get();
 
+        // And Baritone's own opinion, which fires before ours does. It lands deliberately when
+        // it judges it cannot fly on, and there is a band where it has decided that and this
+        // had decided nothing was wrong - so it relaunched into another emergency landing a few
+        // seconds later, and the last of the fireworks went between the two. Being put down on
+        // purpose is a reason to restock, not a landing to undo.
+        boolean emergency = recentEmergency();
+        if (emergency && !lowFireworks && !equippedDamaged && cfg.debug.get()) {
+            log("baritone called an emergency landing; resupplying rather than relaunching");
+        }
+
         // Nothing is low, so there is no resupply to do. Whether the trip is over is a
         // separate question: touching the ground is not arriving. Baritone puts down for
         // terrain, an emergency, or because you took the controls back, and treating any of
         // those as "done" logs you out in the middle of nowhere.
-        if (!lowFireworks && !equippedDamaged) {
+        if (!lowFireworks && !equippedDamaged && !emergency) {
             if (cfg.disconnectWhenDone.get() && arrived()) {
                 to(Phase.WAIT_DISCONNECT);
                 return;
@@ -1747,6 +1788,16 @@ public class ElytraResupply extends Module {
             warning("Elytra has no durability left; not taking off.");
             mc.options.keyJump.setDown(false);
             to(Phase.RESUME);
+            return;
+        }
+
+        // Not while Baritone has just put us down on purpose. Taking off into the emergency it
+        // landed to avoid spends the fireworks that the resupply about to happen is for.
+        if (recentEmergency() && PlayerInv.count(mc, Items.FIREWORK_ROCKET)
+                < cfg.targetFireworks.get()) {
+            mc.options.keyJump.setDown(false);
+            if (cfg.debug.get()) log("holding the takeoff: emergency landing, still short");
+            to(Phase.IDLE);
             return;
         }
 

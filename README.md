@@ -980,6 +980,20 @@ destination. That loop ran at four seconds a lap. So the goal only goes out whil
 gliding, while the routine has nothing else on, and while the elytra process is already active;
 on the ground it is a goal nobody can act on, and part way through a jump it is that cancel.
 
+### Baritone's opinion of "low" beats ours
+
+The module has its own idea of low — a count against `min-fireworks` — and Baritone has its own,
+and **Baritone's fires first**. That leaves a band where it has decided it cannot safely fly on
+and this had decided nothing was wrong: it relaunched, Baritone emergency-landed again a few
+seconds later, and the last of the fireworks went between the two. Being put down deliberately is
+a fact about the flight, not an opinion about the inventory, and arguing with it costs exactly the
+supplies the argument is about.
+
+So an **emergency landing announced by Baritone** counts as a reason to resupply for the next
+twenty seconds, whatever our own count says — and nothing takes off during that window while
+still short of `target-fireworks`. It was already on the ground; the answer is to restock, not to
+undo the landing.
+
 ### The double jump has to be fast
 
 What the game watches for is the tick where the jump key goes from **up to down while you are off
