@@ -328,9 +328,18 @@ time is most of the window.
 | `wanted` | Heavy Core | Only spend a key when the vault shows one of these. |
 | `vaults` | Any | `Any`, `Ominous` or `Normal`. |
 | `range` | 4.5 | How far a vault can be and still be used. |
+| `click-after` | 1 | Ticks to wait after the wanted item appears before using the key. |
 | `rotate` | on | Turn to face it first. |
 | `delay` | 20 | Ticks between two uses. |
 | `restore-slot` | on | Put the hotbar selection back afterwards. |
+
+**The click is one tick late on purpose.** The display reaches the client before the server has
+moved on to it, so a click on the very tick the heavy core appears is answered with the roll
+*before* it — the one you were not waiting for. `click-after` waits for the server to arrive at
+the item that is already on your screen, and what the screen says by then does not matter: it is
+the roll behind it being bought. Measured from the tick the display **changes**, not from any
+later tick it is still showing, or the wait would be counted from a moment the server had already
+passed. One tick is usually enough; a laggy server wants more, and zero clicks immediately.
 
 **Which key is read off the block**, so `Any` uses an ominous key on an ominous vault and an
 ordinary one on the rest without being told which is which — spending the wrong one is a wasted

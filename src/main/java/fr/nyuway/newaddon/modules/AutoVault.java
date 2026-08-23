@@ -97,6 +97,16 @@ public class AutoVault extends Module {
         .defaultValue(true)
         .build());
 
+    private final Setting<Integer> clickAfter = sgGeneral.add(new IntSetting.Builder()
+        .name("click-after")
+        .description("Ticks to wait after the wanted item appears before using the key. The " +
+                     "display arrives before the server has moved on to it, so a click on the " +
+                     "very tick it appears is answered with the roll before it - which is the " +
+                     "one you were not waiting for. One tick is usually enough; a laggy server " +
+                     "wants more.")
+        .defaultValue(1).min(0).max(40).sliderRange(0, 10)
+        .build());
+
     private final Setting<Integer> delay = sgGeneral.add(new IntSetting.Builder()
         .name("delay")
         .description("Ticks between two uses. The vault takes a moment to answer, and clicking " +
@@ -152,6 +162,15 @@ public class AutoVault extends Module {
     private BlockPos drawMatch;
     private BlockPos drawWaiting;
 
+    /** What each vault was showing last tick, so the moment it changes can be told from the rest. */
+    private final java.util.Map<BlockPos, Item> lastShown = new java.util.HashMap<>();
+
+    /** A key waiting to go in: where, which kind, what it was showing, and how long left. */
+    private BlockPos pendingPos;
+    private boolean pendingOminous;
+    private ItemStack pendingShowing = ItemStack.EMPTY;
+    private int pendingTicks;
+
     public AutoVault() {
         super(NewAddon.CATEGORY, "auto-vault",
             "Puts a trial key in only when the vault is showing what you came for.");
@@ -163,6 +182,9 @@ public class AutoVault extends Module {
         homeSlot = -1;
         drawMatch = null;
         drawWaiting = null;
+        pendingPos = null;
+        pendingShowing = ItemStack.EMPTY;
+        lastShown.clear();
 
         //? if <1.21 {
         /*warning("Vaults do not exist on this version; nothing will happen.");
@@ -181,6 +203,10 @@ public class AutoVault extends Module {
         drawMatch = null;
         drawWaiting = null;
 
+        // The map is one entry per vault ever looked at; a chamber is a few dozen and a session
+        // is many chambers, so it is emptied whenever nothing is pending rather than grown.
+        if (lastShown.size() > 256 && pendingPos == null) lastShown.clear();
+
         if (cooldown > 0) {
             cooldown--;
 
@@ -190,9 +216,40 @@ public class AutoVault extends Module {
             return;
         }
 
+        // A key that was lined up a moment ago and is now due.
+        if (pendingPos != null) {
+            drawMatch = pendingPos;
+            if (--pendingTicks > 0) return;
+
+            BlockPos pos = pendingPos;
+            boolean ominous = pendingOminous;
+            ItemStack showing = pendingShowing;
+            pendingPos = null;
+            pendingShowing = ItemStack.EMPTY;
+
+            if (stillUsable(pos)) use(pos, ominous, showing);
+            return;
+        }
+
         //? if >=1.21 {
         scanAndUse();
         //?}
+    }
+
+    /** Whether a vault lined up a moment ago is still worth the key. */
+    private boolean stillUsable(BlockPos pos) {
+        //? if >=1.21 {
+        if (!Reach.canReach(mc, pos, false, range.get())) return false;
+
+        var state = mc.level.getBlockState(pos);
+        if (!(state.getBlock() instanceof net.minecraft.world.level.block.VaultBlock)) return false;
+
+        var phase = state.getValue(net.minecraft.world.level.block.VaultBlock.STATE);
+        return phase == net.minecraft.world.level.block.entity.vault.VaultState.ACTIVE
+            || phase == net.minecraft.world.level.block.entity.vault.VaultState.INACTIVE;
+        //?} else {
+        /*return false;
+        *///?}
     }
 
     //? if >=1.21 {
@@ -252,13 +309,35 @@ public class AutoVault extends Module {
             ItemStack showing = vault.getSharedData().getDisplayItem();
             if (showing.isEmpty()) return false;
 
-            if (!wanted.get().contains(showing.getItem())) {
+            Item now = showing.getItem();
+            Item before = lastShown.put(pos, now);
+
+            if (!wanted.get().contains(now)) {
                 if (drawWaiting == null) drawWaiting = pos;
                 return false;
             }
 
             drawMatch = pos;
-            use(pos, ominous, showing);
+
+            // Only the tick it appears on, not every tick it sits there. The wait below is
+            // measured from the change, so counting it from a later tick would be waiting for
+            // the server to catch up to something it had already passed.
+            if (before == now) return false;
+
+            if (clickAfter.get() <= 0) {
+                use(pos, ominous, showing);
+                return true;
+            }
+
+            // Lined up rather than used. The display reaches the client before the server has
+            // moved on to it, so a click on the tick it appears is answered with the roll
+            // before it - the one you were not waiting for. Waiting a moment lets the server
+            // arrive at the item that is already on screen, and what the screen says by then
+            // does not matter: it is the roll behind it that is being bought.
+            pendingPos = pos;
+            pendingOminous = ominous;
+            pendingShowing = showing.copy();
+            pendingTicks = clickAfter.get();
             return true;
         }
     }
