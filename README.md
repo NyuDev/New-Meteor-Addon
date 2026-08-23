@@ -947,6 +947,12 @@ appears, and the server quietly puts it back. Nothing says so. The client is lef
 three stacks of fireworks and the server believing it has none, and the difference only ever shows
 up as a flight that ends the moment it starts.
 
+It is **not a phase**, and that matters. It was one, sitting between the wings coming out and the
+destination being handed back — two seconds of gliding with nowhere to go, on every single
+takeoff. The player came down inside those two seconds, the landing started a relaunch, and the
+relaunch took off into another two seconds of the same. Nothing may come between the takeoff and
+the goal. The counting runs beside the flight on its own clock instead.
+
 So `verify-supplies` counts again once airborne, after `verify-ticks` — long enough for a rollback
 to have arrived, it being an ordinary inventory update a round trip after the click that caused it.
 If the fireworks are not there the run starts over instead of taking off on them. A second run

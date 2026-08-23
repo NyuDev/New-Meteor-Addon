@@ -75,10 +75,7 @@ public class ElytraResupply extends Module {
         REPOSITION,
         /** Coming down on solid ground before the void gets us. */
         VOID_LAND,
-        TAKEOFF, WAIT_DISCONNECT,
-        /** Counting the supplies again, in case the server disagreed about them. */
-        VERIFY,
-        RESUME
+        TAKEOFF, WAIT_DISCONNECT, RESUME
     }
 
     /** Ticks any single phase may take before the run is treated as failed. */
@@ -302,6 +299,7 @@ public class ElytraResupply extends Module {
         climbTo = null;
         takeoffFailures = 0;
         rollbacks = 0;
+        verifyAt = 0;
         relaunchBurst = 0;
         lastRelaunchAt = 0;
         standDownUntil = 0;
@@ -480,9 +478,10 @@ public class ElytraResupply extends Module {
             return;
         }
 
-        // Before the phase check: a climb starts at the end of a run, so by the time it is
-        // happening the routine is idle again and would have returned already.
+        // Before the phase check: both of these start at the end of a run, so by the time they
+        // are happening the routine is idle again and would have returned already.
         climb();
+        checkSupplies();
 
         if (phase == Phase.IDLE) {
             watchForLanding();
@@ -547,7 +546,6 @@ public class ElytraResupply extends Module {
             case VOID_LAND -> voidLand();
             case TAKEOFF -> takeoff();
             case WAIT_DISCONNECT -> waitAndDisconnect();
-            case VERIFY -> verify();
             case SWAP_ELYTRA -> swapElytra();
             case RESUME -> resume();
             default -> { }
@@ -1724,9 +1722,7 @@ public class ElytraResupply extends Module {
             takeoffFailures = 0;
             relaunchTries = 0;
 
-            // Airborne, and only now is it worth asking whether the supplies are real. Counting
-            // them on the ground would count a rollback that has not arrived yet.
-            to(Phase.VERIFY);
+            to(Phase.RESUME);
             return;
         }
 
@@ -1937,31 +1933,35 @@ public class ElytraResupply extends Module {
     private int groundedClimbTicks;
 
     /**
-     * Counts what the run came for, a moment after it finished.
+     * Counts what the run came for, a little while after the flight resumes.
      *
      * <h2>Why a second count</h2>
      * 2b2t rolls an inventory back now and again: the click goes through on the client, the
      * stack appears, and the server quietly puts it back where it was. Nothing says so. The
      * client is left believing it has three stacks of fireworks and the server believing it has
-     * none, and the difference only ever shows up as a flight that ends the moment it starts -
-     * an emergency landing seconds after taking off, which is what it looked like.
+     * none, and the difference only ever shows up as a flight that ends the moment it starts.
      *
-     * <p>So the count is taken again after a pause long enough for a rollback to have arrived,
-     * and if the supplies are not there the run starts over rather than taking off on them. A
-     * second run costs a minute. Taking off without fireworks costs the trip.
+     * <h2>Why it is not a phase</h2>
+     * It was one, and it sat between the wings coming out and the destination being handed back
+     * - two seconds of gliding with nowhere to go, every single takeoff. The player came down
+     * inside them, the landing started a relaunch, and the relaunch took off into another two
+     * seconds of the same. That is the loop, and it was mine. Nothing may come between the
+     * takeoff and the goal; the counting happens beside the flight instead, on its own clock.
      */
-    private void verify() {
-        if (!cfg.verifySupplies.get()) {
-            to(Phase.RESUME);
-            return;
-        }
+    private void checkSupplies() {
+        if (verifyAt == 0 || !cfg.verifySupplies.get()) return;
 
-        if (phaseTicks < cfg.verifyTicks.get()) return;
+        // Only while genuinely flying. On the ground the routine owns what happens next, and a
+        // count taken mid-jump is a count of a rollback that has not arrived yet.
+        if (mc.player == null || !mc.player.isFallFlying()) return;
+        if (--verifyAt > 0) return;
+
+        verifyAt = 0;
 
         int fireworks = PlayerInv.count(mc, Items.FIREWORK_ROCKET);
         if (fireworks > cfg.minFireworks.get()) {
-            if (cfg.debug.get()) log("verified %d fireworks", fireworks);
-            to(Phase.RESUME);
+            if (cfg.debug.get()) log("verified %d fireworks in the air", fireworks);
+            rollbacks = 0;
             return;
         }
 
@@ -1971,7 +1971,6 @@ public class ElytraResupply extends Module {
             warning("Still only %d fireworks after %d tries; flying on with what there is.",
                 fireworks, MAX_ROLLBACKS);
             rollbacks = 0;
-            to(Phase.RESUME);
             return;
         }
 
@@ -1982,6 +1981,9 @@ public class ElytraResupply extends Module {
         resumeTarget = again;
         to(Phase.LAND);
     }
+
+    /** Ticks of flight left before the supplies are counted again, or zero for not counting. */
+    private int verifyAt;
 
     /** Runs that ended short of supplies in a row, so a genuinely empty shulker is not a loop. */
     private int rollbacks;
@@ -2018,6 +2020,9 @@ public class ElytraResupply extends Module {
             climbTicks = 0;
             groundedClimbTicks = 0;
         }
+
+        // Counted later, while flying, and never in the way of the destination above.
+        verifyAt = cfg.verifySupplies.get() ? cfg.verifyTicks.get() : 0;
     }
 
     /**
