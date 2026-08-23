@@ -97,8 +97,16 @@ public class ElytraResupply extends Module {
      */
     private static final int COLLECT_GIVEUP = 20 * 30;
 
+    /**
+     * Ticks in one jump-and-deploy attempt.
+     *
+     * <p>Six, because the edge that deploys the wings has to arrive while the first jump is
+     * still carrying you. Twenty - a whole second - put it after the landing, every time.
+     */
+    private static final int TAKEOFF_CYCLE = 6;
+
     /** Ticks of jump attempts before a stuck takeoff is given up rather than hopping forever. */
-    private static final int TAKEOFF_GIVEUP = 60;
+    private static final int TAKEOFF_GIVEUP = 140;
 
     /**
      * Failed takeoffs in a row before the module bows out and hands control back to the player.
@@ -1723,14 +1731,19 @@ public class ElytraResupply extends Module {
         }
 
         // A block closed around us - a landing inside terrain, or something placed where we
-        // stand. No amount of jumping gets out of that, so dig first and come back to it. The
-        // attempt clock is held back so the digging does not eat the takeoff's patience.
+        // stand. No amount of jumping gets out of that, so dig first and come back to it.
+        //
+        // The clock used to be wound all the way back here, every tick this fired. One block
+        // that kept being found - a hitbox clipping something overhead mid-jump will do it -
+        // meant the cycle never got past its first tick, so the second jump was never reached
+        // and the takeoff hopped in place for as long as anybody watched. It gives back a few
+        // ticks now instead of all of them.
         BlockPos trap = Unstuck.find(mc, unstickCursor);
         if (trap != null) {
             mc.options.keyJump.setDown(false);
             if (phaseTicks % 20 == 1 && cfg.debug.get()) log("stuck at takeoff, breaking free");
             Interactions.mine(mc, trap, cfg.silentRotations.get(), true);
-            phaseTicks = 1;
+            phaseTicks = Math.max(0, phaseTicks - TAKEOFF_CYCLE);
             return;
         }
 
@@ -1766,22 +1779,30 @@ public class ElytraResupply extends Module {
             return;
         }
 
-        // Cycle the jump sequence. Landing again part-way through is normal - a clipped block,
-        // a slope - and the only thing missing at that point is the second jump, so the cycle
-        // simply restarts rather than counting the trip as failed.
-        int tick = phaseTicks % 20;
-        if (phaseTicks >= 20 && tick == 0 && mc.player.onGround() && cfg.debug.get()) {
+        // The jump, then the second jump, and quickly. What the game is watching for is the
+        // tick where the key goes from up to down while you are off the ground - that edge is
+        // the whole of it, and it has to land while the jump is still carrying you. A whole
+        // second of cycle spent the edge after the fall had already put both feet back on the
+        // floor, so the sequence played out over and over and never once deployed anything.
+        //
+        // Six ticks: down, down, up, then down again a fifth of a second in, near the top of
+        // the jump. If that misses, six ticks later there is another one, and the pressing does
+        // not stop until the wings are out - which matters most in the case where it matters at
+        // all, which is falling.
+        int tick = phaseTicks % TAKEOFF_CYCLE;
+        if (tick == 0 && phaseTicks > 0 && mc.player.onGround() && cfg.debug.get()) {
             log("back on the ground; jumping again");
         }
 
-        if (tick < 3) {
+        if (tick <= 1) {
             mc.options.keyJump.setDown(true);
-        } else if (tick < 6) {
+        } else if (tick == 2) {
+            // One tick up. Any longer and the edge arrives after the apex.
             mc.options.keyJump.setDown(false);
         } else {
-            // Airborne: this press is the second jump that starts the glide. Grounded: we came
-            // back down, so hold off and let the next cycle start the sequence over.
-            mc.options.keyJump.setDown(!mc.player.onGround());
+            // The edge. Off the ground it deploys; on the ground it is a second jump, which is
+            // the right thing to be doing there anyway.
+            mc.options.keyJump.setDown(true);
         }
     }
 
@@ -1899,7 +1920,13 @@ public class ElytraResupply extends Module {
         relaunchBurst = 0;
         standDownUntil = now + STAND_DOWN_MS;
         warning("Taking off and landing over and over; leaving it alone for a minute.");
+
+        // Keeping the destination. Standing down is a pause, not an arrival, and throwing away
+        // where we were going means the minute of quiet is followed by nothing at all - which
+        // is the difference between a rest and giving up.
+        BlockPos keep = resumeTarget;
         reset();
+        resumeTarget = keep;
         return true;
     }
 

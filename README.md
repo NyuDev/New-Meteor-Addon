@@ -974,6 +974,24 @@ destination. That loop ran at four seconds a lap. So the goal only goes out whil
 gliding, while the routine has nothing else on, and while the elytra process is already active;
 on the ground it is a goal nobody can act on, and part way through a jump it is that cancel.
 
+### The double jump has to be fast
+
+What the game watches for is the tick where the jump key goes from **up to down while you are off
+the ground**. That edge is the whole of deploying an elytra, and it has to land while the first
+jump is still carrying you. The cycle was a second long, which put the edge after the fall had
+already returned both feet to the floor — so the sequence played out again and again and never
+once deployed anything, exactly as you saw. It is six ticks now: down, up for one tick, down again
+about a tenth of a second in and well before the apex. If it misses, the next attempt is six ticks
+later, and the pressing does not stop until the wings are out — which matters most in the case
+where it matters at all, which is falling.
+
+Two things also stopped it retrying. A block found in the way used to wind the attempt clock all
+the way back, every tick it was found — one block that kept being found, such as a hitbox clipping
+something overhead mid-jump, meant the cycle never got past its first tick. It gives back a few
+ticks now instead of all of them. And the loop guard below threw the destination away when it
+stood down, so the minute of quiet was followed by nothing at all; standing down is a pause, not
+an arrival, and it keeps where it was going.
+
 A **relaunch-loop guard** sits under all of it: more than five takeoffs inside fifteen seconds and
 it stands down for a minute and says so. The existing counter could not see this, being cleared
 the moment both feet leave the ground — which a loop that takes off successfully every time and
