@@ -42,7 +42,6 @@ public final class ResupplySettings {
     public final Setting<Integer> voidMargin;
     public final Setting<Boolean> landOnRestart;
     public final Setting<java.util.List<String>> restartWarnings;
-    public final Setting<Boolean> lookDownOnRestart;
     public final Setting<Boolean> resumeAfterRestart;
     public final Setting<Integer> resumeDelay;
     public final Setting<Boolean> verifySupplies;
@@ -200,10 +199,13 @@ public final class ResupplySettings {
 
         lookDown = sgGeneral.add(new BoolSetting.Builder()
             .name("look-down")
-            .description("Point at the ground whenever nothing else needs looking at. In the " +
-                         "End that is the difference between a quiet resupply and a crowd of " +
-                         "endermen; off, your view is left alone entirely.")
-            .defaultValue(false)
+            .description("Look at the ground once on landing, as a reflex, before anything " +
+                         "else happens. In the End that is the difference between a quiet " +
+                         "resupply and an enderman: standing on the ground staring straight " +
+                         "ahead is the one posture that starts a fight by itself. Once, not " +
+                         "held - everything afterwards is free to look wherever it needs to, " +
+                         "and in the air your view is left alone entirely.")
+            .defaultValue(true)
             .build());
 
         holdPosition = sgGeneral.add(new BoolSetting.Builder()
@@ -269,14 +271,6 @@ public final class ResupplySettings {
             .visible(landOnRestart::get)
             .build());
 
-        lookDownOnRestart = sgRestart.add(new BoolSetting.Builder()
-            .name("look-down")
-            .description("Look at the ground once, after landing and coming to a stop. Once, " +
-                         "not held: a client that keeps forcing a pitch is doing something no " +
-                         "idle player does.")
-            .defaultValue(true)
-            .visible(landOnRestart::get)
-            .build());
 
         resumeAfterRestart = sgRestart.add(new BoolSetting.Builder()
             .name("resume-after-restart")

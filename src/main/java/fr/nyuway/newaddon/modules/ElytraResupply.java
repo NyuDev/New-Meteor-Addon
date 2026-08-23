@@ -314,7 +314,6 @@ public class ElytraResupply extends Module {
         restartHold = false;
         sawTheRestart = false;
         settleAfterRestart = 0;
-        lookedDown = false;
         relaunchBurst = 0;
         lastRelaunchAt = 0;
         standDownUntil = 0;
@@ -441,9 +440,6 @@ public class ElytraResupply extends Module {
     /** Ticks of settled world left before flying on, counted only after that first change. */
     private int settleAfterRestart;
 
-    /** Whether the one look at the ground has been done. */
-    private boolean lookedDown;
-
     /**
      * Stops everything and comes down, because the server has said it is going.
      *
@@ -456,7 +452,6 @@ public class ElytraResupply extends Module {
         restartHold = true;
         sawTheRestart = false;
         settleAfterRestart = 0;
-        lookedDown = false;
 
         // Whatever Baritone was aiming at, before anything touches its goal. Losing this is
         // losing the trip, and the whole point of surviving a restart is not to lose the trip.
@@ -508,13 +503,8 @@ public class ElytraResupply extends Module {
             return true;
         }
 
-        // Down and still. One look at the ground, and then nothing at all - a client that keeps
-        // forcing a pitch is doing something no idle player does.
-        if (!lookedDown && cfg.lookDownOnRestart.get() && stepSq < 0.0001) {
-            lookedDown = true;
-            meteordevelopment.meteorclient.utils.player.Rotations.rotate(
-                mc.player.getYRot(), 90.0);
-        }
+        // Down. The look at the ground is the ordinary landing reflex above rather than a
+        // second copy of it here - the thing being avoided is the same thing either way.
         return true;
     }
 
@@ -676,6 +666,11 @@ public class ElytraResupply extends Module {
             return;
         }
 
+        // First of all, and whatever else is going on. The moment worth having it is the moment
+        // of touching down, and the state most in need of it is the one where the routine has
+        // nothing to do: standing still, on the ground, looking straight ahead.
+        lookDownOnLanding();
+
         // Before the phase check: both of these start at the end of a run, so by the time they
         // are happening the routine is idle again and would have returned already.
         climb();
@@ -687,7 +682,7 @@ public class ElytraResupply extends Module {
         }
 
         holdPosition();
-        parkView();
+
 
         // The inventory screen the moves are made from puts itself away shortly after the last
         // of them, so it is never left up in front of a phase that wants to click the world.
@@ -797,12 +792,39 @@ public class ElytraResupply extends Module {
      * well below every interaction and simply fills the gaps. In the End those gaps are what
      * decides whether a resupply is quiet: looking at an enderman is the whole of the crime.
      */
-    private void parkView() {
-        if (!cfg.lookDown.get()) return;
+    /**
+     * Looks at the ground once, the moment we touch it.
+     *
+     * <h2>Once, and then out of the way</h2>
+     * This used to hold the view down for as long as the routine ran, at a priority the routine
+     * then had to fight to place a block. Held is the wrong shape: what matters is the reflex,
+     * the first look after landing, before anything has had time to notice you. After that the
+     * run needs to look at chests and shulkers and the ground it is standing on, and none of
+     * that is helped by something dragging the pitch back.
+     *
+     * <p>The reason it is worth doing at all is endermen. Standing still on the ground staring
+     * straight ahead is the one posture that starts a fight without anybody choosing to - it
+     * happened, and only somebody watching kept the bot alive. In the air nothing is touched:
+     * there is nothing to provoke up there and the flight needs its own heading.
+     */
+    private void lookDownOnLanding() {
+        if (mc.player == null) return;
 
+        // Airborne: nothing to do, and the next landing gets its own look.
+        if (!mc.player.onGround()) {
+            lookedDownHere = false;
+            return;
+        }
+
+        if (lookedDownHere || !cfg.lookDown.get()) return;
+
+        lookedDownHere = true;
         Rotations.rotate(mc.player.getYRot(), 90.0f, PARK_PRIORITY,
             !cfg.silentRotations.get(), () -> { });
     }
+
+    /** Whether the one look has been taken for the landing we are currently sitting in. */
+    private boolean lookedDownHere;
 
     /** Paces an occasional debug line. Its own counter: sharing one starves both. */
     private boolean debugDue() {

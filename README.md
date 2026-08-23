@@ -991,7 +991,6 @@ when the server goes is the one moment where nothing can be done about anything.
 | --- | --- | --- |
 | `land-on-restart` | on | Put down as soon as a restart is announced. |
 | `restart-warnings` | `Server restarting in` | Lines that mean one is coming, matched anywhere in the message. |
-| `look-down` | on | Look at the ground once, after landing and stopping. |
 | `resume-after-restart` | on | Take off and carry on once the world settles. |
 | `resume-delay` | 200 | Ticks of settled world before flying on. |
 
@@ -1002,6 +1001,20 @@ has to appear near the *start* of what is left, with only enough slack for a tim
 The same guard covers Baritone's emergency-landing line, which additionally has to carry
 Baritone's own name: both of these are things people say in chat, and one of them lands the bot
 while the other holds its takeoff.
+
+### The landing reflex
+
+**`look-down`** looks at the ground **once**, the moment the ground is touched, before anything
+else happens — and then gets out of the way. It used to hold the view down for as long as the
+routine ran, at a priority the routine then had to fight to place a block, which is the wrong
+shape: what matters is the reflex, the first look after landing, before anything has had time to
+notice you. Everything afterwards is free to look at chests, shulkers and blocks as it needs to.
+
+The reason it is worth doing is endermen. Standing still on the ground staring straight ahead is
+the one posture that starts a fight without anybody choosing to — it happened, and only somebody
+watching kept the bot alive. It now runs on every landing rather than only during a routine,
+because the state most in need of it is the one where the routine has nothing to do. In the air
+nothing is touched: there is nothing to provoke up there and the flight needs its own heading.
 
 Whatever the routine was doing is **dropped** rather than aborted into a resupply, the
 destination is captured first, and it comes down — by cancelling the flight, since holding a key
