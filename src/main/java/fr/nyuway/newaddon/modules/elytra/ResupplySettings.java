@@ -40,6 +40,10 @@ public final class ResupplySettings {
     public final Setting<Double> arrivalRadius;
     public final Setting<Boolean> voidGuard;
     public final Setting<Integer> voidMargin;
+    public final Setting<Integer> fireworksFloor;
+    public final Setting<Boolean> landWhenDry;
+    public final Setting<Integer> retryDelay;
+    public final Setting<Integer> maxFailedRuns;
     public final Setting<Boolean> landOnRestart;
     public final Setting<java.util.List<String>> restartWarnings;
     public final Setting<Boolean> resumeAfterRestart;
@@ -251,6 +255,43 @@ public final class ResupplySettings {
                          "noticing.")
             .defaultValue(32).min(4).max(128).sliderRange(8, 64)
             .visible(voidGuard::get)
+            .build());
+
+        SettingGroup sgSafety = settings.createGroup("Safety");
+
+        fireworksFloor = sgSafety.add(new IntSetting.Builder()
+            .name("fireworks-floor")
+            .description("Never leave the ground with fewer than this many fireworks. Not a " +
+                         "resupply trigger - a refusal: below it nothing takes off, nothing " +
+                         "resumes a trip and nothing climbs, whatever else has been decided. " +
+                         "An elytra with nothing to fire is a glide, and a glide over the End " +
+                         "ends in the void. One is the least this can be.")
+            .defaultValue(4).min(0).max(64).sliderRange(0, 16)
+            .build());
+
+        landWhenDry = sgSafety.add(new BoolSetting.Builder()
+            .name("land-when-dry")
+            .description("Put down on purpose the moment the fireworks run out in the air, " +
+                         "while there is still height to reach ground with. Height spent going " +
+                         "forwards is height that cannot be spent going down, and the last of " +
+                         "it is worth more than the distance it buys.")
+            .defaultValue(true)
+            .build());
+
+        retryDelay = sgSafety.add(new IntSetting.Builder()
+            .name("retry-delay")
+            .description("Ticks to wait before starting another resupply after one that fixed " +
+                         "nothing. Retrying the same failure once a second is not persistence, " +
+                         "it is a loop with chat spam attached.")
+            .defaultValue(200).min(20).max(2400).sliderRange(40, 600)
+            .build());
+
+        maxFailedRuns = sgSafety.add(new IntSetting.Builder()
+            .name("max-failed-runs")
+            .description("How many resupplies may fail in a row before the module stops trying " +
+                         "and stands still. Somewhere with nowhere to set up is not somewhere " +
+                         "the next attempt will work either.")
+            .defaultValue(3).min(1).max(20).sliderRange(1, 10)
             .build());
 
         SettingGroup sgRestart = settings.createGroup("Restart");

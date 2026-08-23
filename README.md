@@ -931,9 +931,9 @@ the slot it came from → break the ender chest with Silk Touch → pick it up.
 
 | Setting | Default | |
 | --- | --- | --- |
-| `min-fireworks` / `target-fireworks` | 8 / 192 | Resupply below the first, carry away the second. |
+| `min-fireworks` / `target-fireworks` | 8 / 320 | Resupply below the first, carry away the second. |
 | `min-elytra-durability` | 80 | Mend once remaining durability drops below this. |
-| `xp-bottles` | 128 | Bottles to take out per mending session; leftovers go back. |
+| `xp-bottles` | 256 | Bottles to take out per mending session; leftovers go back. |
 | `settle-ticks` | 20 | Ticks of standing genuinely still before anything is placed. Touching the ground is not the same as having stopped. |
 | `make-room` | on | Drop one junk stack at your feet when the pack is full, so a broken shulker has somewhere to go. |
 | `open-inventory` | on | Put the inventory screen up before rearranging the hotbar, the way a player would. |
@@ -949,9 +949,13 @@ the slot it came from → break the ender chest with Silk Touch → pick it up.
 | `climb-interval` | 20 | Ticks between two goals while climbing. |
 | `climb-timeout` | 900 | Ticks of climbing before flying on at whatever height was reached. |
 | `void-guard` / `void-margin` | on / 32 | Land on solid ground before the flight sinks past the void damage line, then carry on. |
+| `fireworks-floor` | 4 | Never leave the ground with fewer than this. A refusal, not a trigger. |
+| `land-when-dry` | on | Put down the moment the fireworks run out in the air, while there is still height to reach ground with. |
+| `retry-delay` | 200 | Ticks before another resupply after one that fixed nothing. |
+| `max-failed-runs` | 3 | Failed resupplies in a row before the module stands still and says so. |
 | `use-carried-first` | on | Spend what you already have before opening anything. |
 | `empty-hand-to-open` | on | Hold an empty slot to open a container; some servers require it. |
-| `look-down` | off | Point at the ground when nothing else needs looking at. |
+| `look-down` | on | Look at the ground once on landing, as a reflex. Not held. |
 | `hold-position` | on | Walk back to the setup block when something shoves you off it. |
 | `pause-on-killaura` | on | Freeze mid-run while fighting, resume from the same phase. |
 | `action-delay` | 4 | Ticks between actions. Instant clicks look nothing like a player. |
@@ -985,6 +989,61 @@ Every step is a server round trip (a block must appear, a container must open, a
 be collected), so this is a state machine with a timeout per phase. On any timeout it runs
 its cleanup path rather than stopping where it is, so a failure does not leave your ender
 chest sitting in the open.
+
+### Never on an empty bag
+
+An evening ended with the account gliding over the End at Y 13, no fireworks, nothing to climb
+back with, and no way for anybody to fix it from inside the game. The log has the whole of it:
+
+```
+[18:07:13] [Elytra Resupply] Landing to resupply.
+[18:07:14] [Elytra Resupply] Nowhere safe to set up here.
+[18:07:15] [Elytra Resupply] Resupplying.
+              ... the same two lines, fifteen times, in twenty seconds ...
+[18:07:34] [Elytra Resupply] Resupplied. Flying on.
+[18:08:18] [Baritone] Emergency landing - almost out of elytra durability or fireworks [x2033]
+[18:08:19] [Elytra Resupply] Could not get up to y=120; flying on at y=13.
+[18:08:19] Client disconnected with reason: [AutoLog] You are below Y level 10.0
+```
+
+Three separate faults, stacked:
+
+**A failed run announced itself as a success.** `abort()` is the cleanup path for everything that
+can go wrong - nowhere to put the chest, nothing in it, a timeout - and it ended by resuming the
+trip. That was deliberate, and right for a run that had got *some* of what it came for. It was
+wrong for a run that got none: the module said "Resupplied. Flying on.", handed Baritone the
+destination from before, and started a climb, all with an empty bag.
+
+**Nothing was watching the bag in the air.** The count was read on landing and nowhere else. Once
+airborne the only opinion left was Baritone's, which fires late and answers it by gliding towards
+somewhere to land - over the End that is a straight line out from under the islands.
+
+**The climb kept the glide pointed at the horizon.** It re-issues the destination once a second to
+gain altitude, which needs fireworks to mean anything. With none, all it did was keep telling a
+sinking flight to look at a point thousands of blocks away instead of at the ground.
+
+So there is now a floor, `fireworks-floor`, and it is a refusal rather than a trigger. Below it
+nothing takes off, nothing resumes, nothing climbs, and no route into `TAKEOFF` can get around it -
+relaunch, resume, restart and the void guard's own landing all pass through the same check. A run
+that ends short stands still instead, keeps the destination, and says why:
+
+```
+[Elytra Resupply] 0 fireworks left - not taking off. Flying on with nothing to climb with is
+how a trip ends in the void; the destination is kept and waits here.
+```
+
+Parked on solid ground with a trip pending is recoverable - a rollback can land, you can drop it a
+box, the next attempt can work. Airborne over the void with nothing to fire is not recoverable by
+anybody, which is why the two are not weighed against each other.
+
+`land-when-dry` covers the other half: the moment the count falls through the floor *in the air*,
+the flight is put down on purpose, at ground the module picks, while the altitude to reach it is
+still there. Height spent going forwards is height that cannot be spent going down.
+
+And the loop itself is gone. A run that fixes nothing counts as a failure, waits `retry-delay`
+before the next attempt, and after `max-failed-runs` of them stops trying: somewhere with nowhere
+to set up is not somewhere the next attempt works either. Fifteen failures in twenty seconds was
+never persistence, it was a loop with chat spam attached.
 
 ### Counting the supplies twice
 

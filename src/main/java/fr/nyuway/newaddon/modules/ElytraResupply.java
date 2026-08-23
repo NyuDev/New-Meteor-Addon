@@ -317,6 +317,10 @@ public class ElytraResupply extends Module {
         relaunchBurst = 0;
         lastRelaunchAt = 0;
         standDownUntil = 0;
+        failedRuns = 0;
+        runCooldown = 0;
+        saidGrounded = false;
+        dryLandingAt = 0;
         repairAvoidance();
         if (!BaritoneBridge.isPresent()) {
             warning("This needs Meteor's Baritone fork; nothing will happen without it.");
@@ -485,6 +489,13 @@ public class ElytraResupply extends Module {
             restartHold = false;
             info("Server is back; picking the trip up again.");
 
+            // Back from the restart with nothing to fly on: the limbo may well have rolled the
+            // inventory back to before the resupply.
+            if (resumeTarget != null && !enoughToFly()) {
+                stayGrounded();
+                return true;
+            }
+
             if (resumeTarget != null) {
                 BaritoneBridge.elytraPathTo(resumeTarget);
 
@@ -511,6 +522,121 @@ public class ElytraResupply extends Module {
     /** Whether Baritone has recently said it was putting down because it was nearly out. */
     private boolean recentEmergency() {
         return System.currentTimeMillis() - emergencyAt < EMERGENCY_WINDOW_MS;
+    }
+
+    // --- never on an empty bag ---------------------------------------------------
+
+    /**
+     * How many fireworks make a flight worth starting.
+     *
+     * <p>Never zero, whatever the setting says. Taking off with nothing to fire is not a flight
+     * with a small margin, it is a fall with wings on.
+     */
+    private int flightFloor() {
+        return Math.max(1, cfg.fireworksFloor.get());
+    }
+
+    /** Whether there is enough in the bag to be leaving the ground at all. */
+    private boolean enoughToFly() {
+        return PlayerInv.count(mc, Items.FIREWORK_ROCKET) >= flightFloor();
+    }
+
+    /** Resupplies that ended without fixing anything, one after another. */
+    private int failedRuns;
+
+    /** Ticks before another automatic run may start, after one that got nowhere. */
+    private int runCooldown;
+
+    /** Whether the reason for standing still has already been said once. */
+    private boolean saidGrounded;
+
+    /**
+     * Ends here, on the ground, rather than flying on short.
+     *
+     * <h2>The failure this exists for</h2>
+     * A resupply can end having fixed nothing - nowhere safe for the chest, nothing in it, a
+     * rollback - and every one of those paths used to arrive at the same place: "Resupplied.
+     * Flying on.", the old destination handed back to Baritone, and a climb started towards
+     * cruising height. With an empty bag none of that is a flight. Baritone gets a few hundred
+     * blocks out of the glide, starts calling emergency landings it cannot perform over open
+     * void, and sinks; the climb keeps re-issuing the goal, which keeps it pointed at the
+     * horizon rather than at the ground. That is the whole of how the account was found under
+     * Y 10 in the End with nothing to climb back with.
+     *
+     * <p>The destination is kept, and so is the module: parked on solid ground with a trip
+     * still pending is a recoverable state, and every tick spent standing in it is a tick the
+     * supplies might come back in - a rollback landing, a box dropped, anything. Airborne over
+     * the void with nothing to fire is not recoverable by anybody.
+     */
+    private void stayGrounded() {
+        int have = mc.player == null ? 0 : PlayerInv.count(mc, Items.FIREWORK_ROCKET);
+        BlockPos keep = resumeTarget;
+
+        reset();
+        climbTo = null;
+        resumeTarget = keep;
+
+        // Nothing pending on Baritone's side either: a goal left standing is a walk to the
+        // other side of the world, on foot, from wherever this happened.
+        if (mc.player != null && mc.player.onGround()) BaritoneBridge.cancel();
+
+        if (runCooldown <= 0) runCooldown = cfg.retryDelay.get();
+
+        if (!saidGrounded) {
+            saidGrounded = true;
+            error("%d fireworks left - not taking off. Flying on with nothing to climb with is "
+                + "how a trip ends in the void; the destination is kept and waits here.", have);
+        }
+    }
+
+    /** When the last put-down-for-running-dry was ordered, so it is not ordered every tick. */
+    private long dryLandingAt;
+
+    /** How long that order stands before it is worth giving again. */
+    private static final long DRY_RETRY_MS = 10_000;
+
+    /**
+     * Comes down on purpose the moment the fireworks run out in the air.
+     *
+     * <p>Nothing was watching the bag mid-flight. The count was read on landing, and Baritone's
+     * own idea of low fires late and answers it by gliding towards somewhere to land - which
+     * over the End is a straight line out from under the islands. The moment the last rocket
+     * goes, the altitude still on the clock is the only thing left that can reach ground, and
+     * every block of it spent going forwards is a block that cannot be spent going down.
+     *
+     * @return true when this tick belongs to the put-down and nothing else should run
+     */
+    private boolean dryGuard() {
+        if (!cfg.landWhenDry.get() || mc.player == null || mc.level == null) return false;
+        if (!mc.player.isFallFlying()) return false;
+
+        if (enoughToFly()) {
+            dryLandingAt = 0;
+            return false;
+        }
+
+        // Already told to come down a moment ago; let it get on with it.
+        if (System.currentTimeMillis() - dryLandingAt < DRY_RETRY_MS) return false;
+        dryLandingAt = System.currentTimeMillis();
+
+        // The trip, before anything touches the goal. Losing it here would mean the landing
+        // saved the account and lost the crossing.
+        BlockPos going = BaritoneBridge.isElytraActive()
+            ? BaritoneBridge.elytraDestination() : null;
+        if (going == null) going = BaritoneBridge.currentGoalPos();
+        if (going != null && isRealTravelGoal(going)) resumeTarget = going;
+
+        BlockPos ground = GroundFinder.find(mc, WorldBounds.voidDamageY(mc.level)
+            + cfg.voidMargin.get());
+
+        warning("Out of fireworks at y=%.0f - putting down now, while there is still height to "
+            + "do it with.", mc.player.getY());
+        if (cfg.debug.get()) log("dry guard: landing at %s, will resume %s", ground, resumeTarget);
+
+        BaritoneBridge.elytraPathTo(ground != null ? ground : mc.player.blockPosition());
+        landTicks = 0;
+        to(Phase.LAND);
+        return true;
     }
 
     private void reset() {
@@ -639,6 +765,8 @@ public class ElytraResupply extends Module {
         }
 
         if (rideOutRestart()) return;
+
+        if (runCooldown > 0) runCooldown--;
 
         // The moment the player grabs the controls mid-routine, drop what the routine was doing
         // and get out of the way. Scoped to an active routine so ordinary flight is left alone.
@@ -891,6 +1019,11 @@ public class ElytraResupply extends Module {
             groundTicks = 0;
             // Off the ground for real, so whatever it took worked and the count starts over.
             relaunchTries = 0;
+
+            // Before the void guard, which only wakes up once the drop has already started.
+            // Running dry is what causes that drop; this is the earlier moment.
+            if (dryGuard()) return;
+
             voidGuard();
             return;
         }
@@ -924,6 +1057,11 @@ public class ElytraResupply extends Module {
         // terrain, an emergency, or because you took the controls back, and treating any of
         // those as "done" logs you out in the middle of nowhere.
         if (!lowFireworks && !equippedDamaged && !emergency) {
+            // Whatever went wrong before is behind us: this is what a good state looks like.
+            failedRuns = 0;
+            runCooldown = 0;
+            saidGrounded = false;
+
             if (cfg.disconnectWhenDone.get() && arrived()) {
                 to(Phase.WAIT_DISCONNECT);
                 return;
@@ -974,6 +1112,22 @@ public class ElytraResupply extends Module {
         }
 
         groundTicks = 0;
+
+        // Not straight away, and not for ever. A run that fixed nothing used to be started
+        // again on the very next tick, which is how one bad landing spot produced fifteen
+        // identical failures in twenty seconds and then flew off on an empty bag anyway.
+        if (runCooldown > 0) return;
+
+        if (failedRuns >= cfg.maxFailedRuns.get()) {
+            if (!saidGrounded) {
+                saidGrounded = true;
+                if (mc.player.onGround()) BaritoneBridge.cancel();
+                error("%d resupplies in a row got nowhere here; standing still rather than "
+                    + "flying on short. Move me somewhere with room, or drop me fireworks.",
+                    failedRuns);
+            }
+            return;
+        }
 
         beginRun(false);
     }
@@ -1917,7 +2071,9 @@ public class ElytraResupply extends Module {
 
         // No destination means there is no flight to get back to, so jumping would be for
         // nothing; RESUME simply tidies up and stops.
-        boolean flyOn = resumeTarget != null && cfg.autoTakeoff.get();
+        // Short means RESUME rather than TAKEOFF: it ends in the same refusal either way,
+        // and there is no reason to hop about on the ground first.
+        boolean flyOn = resumeTarget != null && cfg.autoTakeoff.get() && enoughToFly();
         to(flyOn ? Phase.TAKEOFF : Phase.RESUME);
     }
 
@@ -1977,6 +2133,15 @@ public class ElytraResupply extends Module {
             warning("Elytra has no durability left; not taking off.");
             mc.options.keyJump.setDown(false);
             to(Phase.RESUME);
+            return;
+        }
+
+        // The floor, before anything else this phase might decide. Every route into a takeoff
+        // - a relaunch, a resume, a restart, the void guard's own landing - comes through here,
+        // so this is the one place that can promise the wings never come out on an empty bag.
+        if (!enoughToFly()) {
+            mc.options.keyJump.setDown(false);
+            stayGrounded();
             return;
         }
 
@@ -2092,6 +2257,15 @@ public class ElytraResupply extends Module {
             return;
         }
         groundedClimbTicks = 0;
+
+        // Height is bought with fireworks. With none left this is not a climb, it is a goal
+        // handed to the elytra process once a second telling it to keep pointing at a horizon
+        // thousands of blocks away - while what it needs to be doing is looking for ground.
+        if (!enoughToFly()) {
+            if (cfg.debug.get()) log("climb stopped: nothing left to climb with");
+            climbTo = null;
+            return;
+        }
 
         if (mc.player.getY() >= cfg.cruiseHeight.get()) {
             if (cfg.debug.get()) log("cruising at y=%.0f after %d ticks", mc.player.getY(), climbTicks);
@@ -2246,9 +2420,23 @@ public class ElytraResupply extends Module {
         }
 
         BlockPos target = resumeTarget;
+
+        // The one thing that must never happen. Getting here says the run is over, not that it
+        // worked - abort() ends here too, and so does a chest with nothing in it. Flying on
+        // short is not carrying on with a smaller margin, it is leaving the ground with no way
+        // back to it.
+        if (target != null && !enoughToFly()) {
+            stayGrounded();
+            return;
+        }
+
         reset();
 
         if (target == null) return;
+
+        failedRuns = 0;
+        runCooldown = 0;
+        saidGrounded = false;
         info("Resupplied. Flying on.");
         if (cfg.debug.get()) log("resuming to %s", target);
         BaritoneBridge.elytraPathTo(target);
@@ -2273,6 +2461,18 @@ public class ElytraResupply extends Module {
      * happened - worse than carrying on short of supplies.
      */
     private void abort() {
+        // A run being torn down is a run that did not do what it was for. Counting it is what
+        // keeps "nowhere safe to set up here" from being asked again a second later, and again,
+        // until something gives up and flies off on whatever is left in the bag.
+        if (mc.player != null
+            && PlayerInv.count(mc, Items.FIREWORK_ROCKET) < cfg.targetFireworks.get()) {
+            failedRuns++;
+            runCooldown = cfg.retryDelay.get();
+            if (cfg.debug.get()) {
+                log("run aborted still short; %d in a row, waiting %d ticks", failedRuns, runCooldown);
+            }
+        }
+
         if (mc.player != null && isContainerOpen()) mc.player.closeContainer();
 
         if (shulkerPos != null && !mc.level.getBlockState(shulkerPos).isAir()) {
