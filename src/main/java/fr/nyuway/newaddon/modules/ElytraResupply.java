@@ -274,6 +274,16 @@ public class ElytraResupply extends Module {
     private int voidScanCooldown;
     /** World the destination was captured in. */
     private Object lastLevel;
+
+    /**
+     * The dimension the destination belongs to, kept separately from the world object.
+     *
+     * <p>Object identity is the wrong test on its own: a restart swaps the world out and back
+     * without ever leaving the dimension, so the two questions have different answers exactly
+     * when it matters. Held as an Object because the key's type moved packages across the
+     * versions this builds for and nothing here needs to name it - it is only ever compared.
+     */
+    private Object lastDimension;
     /** Edge detection for the manual trigger key. */
     private boolean triggerHeld;
     /**
@@ -301,6 +311,10 @@ public class ElytraResupply extends Module {
         rollbacks = 0;
         verifyAt = 0;
         emergencyAt = 0;
+        restartHold = false;
+        sawTheRestart = false;
+        settleAfterRestart = 0;
+        lookedDown = false;
         relaunchBurst = 0;
         lastRelaunchAt = 0;
         standDownUntil = 0;
@@ -369,6 +383,103 @@ public class ElytraResupply extends Module {
         if (text.contains("Emergency landing") || text.contains("emergency landing")) {
             emergencyAt = System.currentTimeMillis();
         }
+
+        if (!cfg.landOnRestart.get() || restartHold) return;
+
+        for (String warning : cfg.restartWarnings.get()) {
+            if (warning.isBlank() || !text.contains(warning)) continue;
+
+            beginRestartHold();
+            return;
+        }
+    }
+
+    // --- riding out a restart ----------------------------------------------------
+
+    /** True from the first restart warning until the world has settled again afterwards. */
+    private boolean restartHold;
+
+    /** Whether the world has changed at least once since the warning - the restart itself. */
+    private boolean sawTheRestart;
+
+    /** Ticks of settled world left before flying on, counted only after that first change. */
+    private int settleAfterRestart;
+
+    /** Whether the one look at the ground has been done. */
+    private boolean lookedDown;
+
+    /**
+     * Stops everything and comes down, because the server has said it is going.
+     *
+     * <p>Three minutes of warning is plenty to land in and no time at all to be caught in the
+     * air with. Whatever the routine was doing is dropped - not aborted into a resupply, just
+     * dropped - and the destination is kept, because a restart does not change where the trip
+     * was going.
+     */
+    private void beginRestartHold() {
+        restartHold = true;
+        sawTheRestart = false;
+        settleAfterRestart = 0;
+        lookedDown = false;
+
+        // Whatever Baritone was aiming at, before anything touches its goal. Losing this is
+        // losing the trip, and the whole point of surviving a restart is not to lose the trip.
+        if (resumeTarget == null) {
+            BlockPos dest = BaritoneBridge.isElytraActive()
+                ? BaritoneBridge.elytraDestination() : BaritoneBridge.currentGoalPos();
+            if (dest != null && isRealTravelGoal(dest)) resumeTarget = dest;
+        }
+
+        if (phase != Phase.IDLE) reset();
+        BaritoneBridge.cancel();
+        if (mc.options != null) mc.options.keyJump.setDown(false);
+
+        warning("Server restart announced; landing and sitting it out.");
+    }
+
+    /**
+     * Comes down, waits, and picks the trip back up on the other side.
+     *
+     * <p>2b2t parks you in a limbo while it restarts rather than disconnecting you, and that
+     * limbo is the same dimension you were in - so the client sees the world swap out and back
+     * with nothing about the trip having changed. Every swap restarts the settle clock, which
+     * handles the two of them without having to know there are two.
+     *
+     * @return true when this tick belongs to the restart and nothing else should run
+     */
+    private boolean rideOutRestart() {
+        if (!restartHold) return false;
+
+        if (sawTheRestart && cfg.resumeAfterRestart.get() && --settleAfterRestart <= 0) {
+            restartHold = false;
+            info("Server is back; picking the trip up again.");
+
+            if (resumeTarget != null) {
+                BaritoneBridge.elytraPathTo(resumeTarget);
+
+                // In the air already - the server put us back mid-flight - so there is nothing
+                // to take off from and the goal above is the whole of it.
+                if (!mc.player.onGround()) return false;
+                to(Phase.TAKEOFF);
+            }
+            return true;
+        }
+
+        // Coming down. Nothing is forced: cancelling the elytra process is enough, and holding
+        // any key on the way down is how a landing becomes a crash.
+        if (!mc.player.onGround()) {
+            if (BaritoneBridge.isElytraActive()) BaritoneBridge.cancel();
+            return true;
+        }
+
+        // Down and still. One look at the ground, and then nothing at all - a client that keeps
+        // forcing a pitch is doing something no idle player does.
+        if (!lookedDown && cfg.lookDownOnRestart.get() && stepSq < 0.0001) {
+            lookedDown = true;
+            meteordevelopment.meteorclient.utils.player.Rotations.rotate(
+                mc.player.getYRot(), 90.0);
+        }
+        return true;
     }
 
     /** Whether Baritone has recently said it was putting down because it was nearly out. */
@@ -469,19 +580,39 @@ public class ElytraResupply extends Module {
         lastX = mc.player.getX();
         lastZ = mc.player.getZ();
 
-        // A destination belongs to the world it was captured in. Being pulled out of the End
-        // by a stasis chamber leaves a goal that is now tens of millions of blocks away and
-        // can never be reached or "arrived" at - which is a relaunch that never stops.
+        // A destination belongs to the dimension it was captured in. Being pulled out of the End
+        // by a stasis chamber leaves a goal that is now tens of millions of blocks away and can
+        // never be reached or "arrived" at - which is a relaunch that never stops.
+        //
+        // The dimension, not the world object. A restart swaps the world out and back without
+        // ever leaving the End - the limbo it parks you in is the same dimension - so comparing
+        // the objects threw the trip away every time the server rebooted, which is exactly the
+        // moment it is most worth keeping.
         if (mc.level != lastLevel) {
+            Object dimension = mc.level.dimension();
+            boolean sameDimension = lastDimension != null && lastDimension.equals(dimension);
             lastLevel = mc.level;
-            if (resumeTarget != null) {
-                if (cfg.debug.get()) log("world changed; dropping the old destination %s", resumeTarget);
+            lastDimension = dimension;
+            relaunchTries = 0;
+
+            // A world change during a hold is the restart happening, or the way back from it.
+            // Either way the clock starts again: whichever swap this is, the next one resets it.
+            if (restartHold) {
+                sawTheRestart = true;
+                settleAfterRestart = cfg.resumeDelay.get();
+                if (cfg.debug.get()) log("world changed during the restart hold; settling again");
+                return;
+            }
+
+            if (!sameDimension && resumeTarget != null) {
+                if (cfg.debug.get()) log("dimension changed; dropping the old destination %s", resumeTarget);
                 resumeTarget = null;
             }
-            relaunchTries = 0;
             if (phase != Phase.IDLE) abort();
             return;
         }
+
+        if (rideOutRestart()) return;
 
         // The moment the player grabs the controls mid-routine, drop what the routine was doing
         // and get out of the way. Scoped to an active routine so ordinary flight is left alone.

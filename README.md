@@ -980,6 +980,35 @@ destination. That loop ran at four seconds a lap. So the goal only goes out whil
 gliding, while the routine has nothing else on, and while the elytra process is already active;
 on the ground it is a goal nobody can act on, and part way through a jump it is that cancel.
 
+### Sitting out a server restart
+
+2b2t announces a restart three minutes ahead and then parks you in a limbo rather than
+disconnecting you — and that limbo is **the same dimension** you were in, so the client sees the
+world swap out and back with nothing about the trip having actually changed. Being in the air
+when the server goes is the one moment where nothing can be done about anything.
+
+| Setting | Default | |
+| --- | --- | --- |
+| `land-on-restart` | on | Put down as soon as a restart is announced. |
+| `restart-warnings` | `Server restarting in` | Lines that mean one is coming, matched anywhere in the message. |
+| `look-down` | on | Look at the ground once, after landing and stopping. |
+| `resume-after-restart` | on | Take off and carry on once the world settles. |
+| `resume-delay` | 200 | Ticks of settled world before flying on. |
+
+Whatever the routine was doing is **dropped** rather than aborted into a resupply, the
+destination is captured first, and it comes down — by cancelling the flight, since holding a key
+on the way down is how a landing becomes a crash. Once down and still it looks at the ground
+**once**: a client that keeps forcing a pitch is doing something no idle player does.
+
+Every world change restarts the settle clock, which handles the two swaps of a restart without
+having to know there are two. When it runs out the flight resumes; if the server put you back
+mid-air, the goal is the whole of it and there is nothing to take off from.
+
+**The destination now survives.** It used to be dropped whenever the world object changed, which
+a restart does twice — so the trip was thrown away at exactly the moment worth keeping it. The
+test is the *dimension* now, which is what the rule was always about: a stasis pull out of the
+End invalidates a goal, a reboot does not.
+
 ### Baritone's opinion of "low" beats ours
 
 The module has its own idea of low — a count against `min-fireworks` — and Baritone has its own,

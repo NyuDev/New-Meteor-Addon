@@ -6,6 +6,7 @@ import meteordevelopment.meteorclient.settings.IntSetting;
 import meteordevelopment.meteorclient.settings.KeybindSetting;
 import meteordevelopment.meteorclient.settings.Setting;
 import meteordevelopment.meteorclient.settings.SettingGroup;
+import meteordevelopment.meteorclient.settings.StringListSetting;
 import meteordevelopment.meteorclient.settings.Settings;
 import meteordevelopment.meteorclient.utils.misc.Keybind;
 
@@ -39,6 +40,11 @@ public final class ResupplySettings {
     public final Setting<Double> arrivalRadius;
     public final Setting<Boolean> voidGuard;
     public final Setting<Integer> voidMargin;
+    public final Setting<Boolean> landOnRestart;
+    public final Setting<java.util.List<String>> restartWarnings;
+    public final Setting<Boolean> lookDownOnRestart;
+    public final Setting<Boolean> resumeAfterRestart;
+    public final Setting<Integer> resumeDelay;
     public final Setting<Boolean> verifySupplies;
     public final Setting<Integer> verifyTicks;
     public final Setting<Boolean> autoRelaunch;
@@ -243,6 +249,52 @@ public final class ResupplySettings {
                          "noticing.")
             .defaultValue(32).min(4).max(128).sliderRange(8, 64)
             .visible(voidGuard::get)
+            .build());
+
+        SettingGroup sgRestart = settings.createGroup("Restart");
+
+        landOnRestart = sgRestart.add(new BoolSetting.Builder()
+            .name("land-on-restart")
+            .description("Put down as soon as the server announces a restart. Being in the air " +
+                         "when it goes is the one moment where nothing can be done about " +
+                         "anything - the ground is where a flight survives a restart.")
+            .defaultValue(true)
+            .build());
+
+        restartWarnings = sgRestart.add(new StringListSetting.Builder()
+            .name("restart-warnings")
+            .description("Lines that mean a restart is coming. Matched anywhere in the message, " +
+                         "so the countdown lines all match the one entry.")
+            .defaultValue(java.util.List.of("Server restarting in"))
+            .visible(landOnRestart::get)
+            .build());
+
+        lookDownOnRestart = sgRestart.add(new BoolSetting.Builder()
+            .name("look-down")
+            .description("Look at the ground once, after landing and coming to a stop. Once, " +
+                         "not held: a client that keeps forcing a pitch is doing something no " +
+                         "idle player does.")
+            .defaultValue(true)
+            .visible(landOnRestart::get)
+            .build());
+
+        resumeAfterRestart = sgRestart.add(new BoolSetting.Builder()
+            .name("resume-after-restart")
+            .description("Take off and carry on once the server is back and the world has " +
+                         "settled. The destination is kept through the restart - the limbo the " +
+                         "server parks you in is the same dimension, so nothing about the trip " +
+                         "has actually changed.")
+            .defaultValue(true)
+            .visible(landOnRestart::get)
+            .build());
+
+        resumeDelay = sgRestart.add(new IntSetting.Builder()
+            .name("resume-delay")
+            .description("Ticks of a settled world before flying on. Long enough that the " +
+                         "chunks are there and the server has stopped moving you about; every " +
+                         "further world change starts it again.")
+            .defaultValue(200).min(20).max(2400).sliderRange(40, 600)
+            .visible(resumeAfterRestart::get)
             .build());
 
         verifySupplies = sgGeneral.add(new BoolSetting.Builder()
